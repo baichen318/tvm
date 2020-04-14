@@ -106,6 +106,35 @@ void ExprVisitor::VisitExpr_(const ShuffleNode* op) {
   VisitArray(op->vectors, [this](const PrimExpr& e) { this->VisitExpr(e); });
 }
 
+void ExprVisitor::VisitExpr_(const GetBitNode* op) {
+  this->VisitExpr(op->a);
+  this->VisitExpr(op->index);
+}
+
+void ExprVisitor::VisitExpr_(const GetSliceNode* op) {
+  this->VisitExpr(op->a);
+  this->VisitExpr(op->index_left);
+  this->VisitExpr(op->index_right);
+}
+
+void ExprVisitor::VisitExpr_(const SetBitNode* op) {
+  this->VisitExpr(op->a);
+  this->VisitExpr(op->value);
+  this->VisitExpr(op->index);
+}
+
+void ExprVisitor::VisitExpr_(const SetSliceNode* op) {
+  this->VisitExpr(op->a);
+  this->VisitExpr(op->value);
+  this->VisitExpr(op->index_left);
+  this->VisitExpr(op->index_right);
+}
+
+void ExprVisitor::VisitExpr_(const QuantizeNode* op) {
+  this->VisitExpr(op->body);
+  this->VisitExpr(op->bitwidth);
+}
+
 void ExprVisitor::VisitExpr_(const BroadcastNode* op) {
   this->VisitExpr(op->value);
 }
@@ -283,6 +312,64 @@ PrimExpr ExprMutator::VisitExpr_(const ShuffleNode* op) {
     return GetRef<PrimExpr>(op);
   } else {
     return ShuffleNode::make(vectors, op->indices);
+  }
+}
+
+PrimExpr ExprMutator::VisitExpr_(const GetBitNode* op) {
+  PrimExpr a = this->VisitExpr(op->a);
+  PrimExpr index = this->VisitExpr(op->index);
+  if (a.same_as(op->a) && index.same_as(op->index)) {
+    return GetRef<PrimExpr>(op);
+  } else {
+    return GetBitNode::make(a, index);
+  }
+}
+
+PrimExpr ExprMutator::VisitExpr_(const GetSliceNode* op) {
+  PrimExpr a = this->VisitExpr(op->a);
+  PrimExpr index_left = this->VisitExpr(op->index_left);
+  PrimExpr index_right = this->VisitExpr(op->index_right);
+  if (a.same_as(op->a) && index_left.same_as(op->index_left) &&
+    index_right.same_as(op->index_right)) {
+    return GetRef<PrimExpr>(op);
+  } else {
+    return GetSliceNode::make(a, index_left, index_right);
+  }
+}
+
+PrimExpr ExprMutator::VisitExpr_(const SetBitNode* op) {
+  PrimExpr a = this->VisitExpr(op->a);
+  PrimExpr value = this->VisitExpr(op->value);
+  PrimExpr index = this->VisitExpr(op->index);
+  if (a.same_as(op->a) && value.same_as(op->value) &&
+    index.same_as(op->a)) {
+    return GetRef<PrimExpr>(op);
+  } else {
+    return SetBitNode::make(a, value, index);
+  }
+}
+
+PrimExpr ExprMutator::VisitExpr_(const SetSliceNode* op) {
+  PrimExpr a = this->VisitExpr(op->a);
+  PrimExpr value = this->VisitExpr(op->value);
+  PrimExpr index_left = this->VisitExpr(op->index_left);
+  PrimExpr index_right = this->VisitExpr(op->index_right);
+  if (a.same_as(op->a) && value.same_as(op->value) &&
+    index_left.same_as(op->index_left) &&
+    index_right.same_as(op->index_right)) {
+    return GetRef<PrimExpr>(op);
+  } else {
+    return SetSliceNode::make(a, value, index_left, index_right);
+  }
+}
+
+PrimExpr ExprMutator::VisitExpr_(const QuantizeNode* op) {
+  PrimExpr body = this->VisitExpr(op->body);
+  PrimExpr bitwidth = this->VisitExpr(op->bitwidth);
+  if (body.same_as(op->body) && bitwidth.same_as(op->bitwidth)) {
+    return GetRef<PrimExpr>(op);
+  } else {
+    return QuantizeNode::make(body, bitwidth);
   }
 }
 
