@@ -230,7 +230,7 @@ class TCPEventHandler(tornado_util.TCPHandler):
             port, matchkey = args[2]
             self.pending_matchkeys.add(matchkey)
             # got custom address (from rpc server)
-            if args[3] is not None:
+            if len(args) >= 4 and args[3] is not None:
                 value = (self, args[3], port, matchkey)
             else:
                 value = (self, self._addr[0], port, matchkey)
@@ -393,8 +393,7 @@ class Tracker(object):
             except socket.error as sock_err:
                 if sock_err.errno in [98, 48]:
                     continue
-                else:
-                    raise sock_err
+                raise sock_err
         if not self.port:
             raise ValueError("cannot bind to any port in [%d, %d)" % (port, port_end))
         logger.info("bind to %s:%d", host, self.port)

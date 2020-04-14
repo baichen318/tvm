@@ -15,8 +15,8 @@
 # specific language governing permissions and limitations
 # under the License.
 """TF: Tensorflow parser"""
-from __future__ import absolute_import as _abs
-from __future__ import print_function
+# pylint: disable=import-outside-toplevel, assignment-from-no-return
+
 import os
 from tvm.contrib import util
 
@@ -73,21 +73,22 @@ class TFParser(object):
     def _get_output_names(self):
         """Return the concatenated output names"""
         try:
-            import tensorflow as tf
+            import tensorflow.compat.v1 as tf
         except ImportError:
             raise ImportError(
                 "InputConfiguration: Unable to import tensorflow which is "
                 "required to restore from saved model.")
         tags = self._get_tag_set()
+        output_names = set()
         with tf.Session() as sess:
             meta_graph_def = tf.saved_model.loader.load(sess,
                                                         tags,
                                                         self._model_dir)
-            output_names = set()
             for sig_def in meta_graph_def.signature_def.values():
                 for output_tensor in sig_def.outputs.values():
                     output_names.add(output_tensor.name.replace(":0", ""))
-            return ",".join(output_names)
+        tf.reset_default_graph()
+        return ",".join(output_names)
 
     def _load_saved_model(self):
         """Load the tensorflow saved model."""

@@ -22,8 +22,8 @@ import logging
 import os
 
 import tvm
+from tvm import te
 from tvm import autotvm
-from tvm.contrib.util import get_lower_ir
 import topi
 import vta
 import vta.testing
@@ -33,26 +33,26 @@ env = vta.get_env()
 Workload = namedtuple("DenseWorkload",
                       ['batch', 'in_filter', 'out_filter'])
 
-resnet_wkls = [
-    # Workloads of resnet18 on imagenet
-    ('resnet-18.dense',  Workload(16, 512, 1024)),
+dense_wkls = [
+    ('lstm.dense.1',  Workload(1, 256, 128)),
+    ('lstm.dense.4',  Workload(4, 256, 128)),
 ]
 
-@tvm.tag_scope(tag=topi.tag.ELEMWISE)
+@tvm.te.tag_scope(tag=topi.tag.ELEMWISE)
 def my_clip(x, a_min, a_max):
     """Unlike topi's current clip, put min and max into two stages."""
-    const_min = tvm.const(a_min, x.dtype)
-    const_max = tvm.const(a_max, x.dtype)
-    x = tvm.compute(x.shape, lambda *i: tvm.min(x(*i), const_max), name="clipA")
-    x = tvm.compute(x.shape, lambda *i: tvm.max(x(*i), const_min), name="clipB")
+    const_min = tvm.tir.const(a_min, x.dtype)
+    const_max = tvm.tir.const(a_max, x.dtype)
+    x = te.compute(x.shape, lambda *i: tvm.te.min(x(*i), const_max), name="clipA")
+    x = te.compute(x.shape, lambda *i: tvm.te.max(x(*i), const_min), name="clipB")
     return x
 
 def dense(N, CI, CO):
     data_shape = (N//env.BATCH, CI//env.BLOCK_IN, env.BATCH, env.BLOCK_IN)
     kernel_shape = (CO//env.BLOCK_OUT, CI//env.BLOCK_IN, env.BLOCK_OUT, env.BLOCK_IN)
 
-    data = tvm.placeholder(data_shape, name="data", dtype=env.inp_dtype)
-    kernel = tvm.placeholder(kernel_shape, name="kernel", dtype=env.wgt_dtype)
+    data = te.placeholder(data_shape, name="data", dtype=env.inp_dtype)
+    kernel = te.placeholder(kernel_shape, name="kernel", dtype=env.wgt_dtype)
 
     with tvm.target.vta():
         res = topi.nn.dense(data, kernel, None, 'int32')
@@ -60,10 +60,10 @@ def dense(N, CI, CO):
         res = my_clip(res, 0, 127)
         res = topi.cast(res, "int8")
 
-    if tvm.target.current_target().device_name == 'vta':
+    if tvm.target.Target.current().device_name == 'vta':
         s = topi.generic.schedule_dense([res])
     else:
-        s = tvm.create_schedule([res.op])
+        s = te.create_schedule([res.op])
 
     return s, [data, kernel, res]
 
@@ -71,7 +71,14 @@ if __name__ == '__main__':
 
     # Logging config (for printing tuning log to the screen)
     logging.basicConfig()
-    logging.getLogger('autotvm').setLevel(logging.DEBUG)
+    # logging.getLogger('autotvm').setLevel(logging.DEBUG)
+
+    # Tuning log files
+    log_file = "%s.dense.log" % (env.TARGET)
+    # create tmp log file
+    tmp_log_file = log_file + ".tmp"
+    if os.path.exists(log_file):
+        os.remove(log_file)
 
     # Get tracker info from env
     tracket_host = os.environ.get("TVM_TRACKER_HOST", None)
@@ -80,7 +87,9 @@ if __name__ == '__main__':
         print("Set your AutoTVM tracker node host and port variables to run the autotuner")
         exit()
 
-    for wl_name, wl in resnet_wkls:
+    for idx, (wl_name, wl) in enumerate(dense_wkls):
+
+        prefix = "[Task %2d/%2d] " % (idx, len(dense_wkls))
 
         # Workload parameters
         N = wl.batch
@@ -91,15 +100,24 @@ if __name__ == '__main__':
                 target=tvm.target.vta(), target_host=env.target_host, template_key='direct')
         print(task.config_space)
 
+        # Tune
         measure_option = autotvm.measure_option(
-                builder=autotvm.LocalBuilder(build_func=vta.vta_autotvm_build_func),
-                runner=autotvm.RPCRunner(env.TARGET, tracket_host, int(tracket_port), number=4, repeat=3, timeout=10000,
-                                        check_correctness=True))
+                builder=autotvm.LocalBuilder(),
+                runner=autotvm.RPCRunner(
+                        env.TARGET, host=tracket_host, port=int(tracket_port),
+                        number=5, timeout=60,
+                        check_correctness=True))
 
+        # Run Tuner
         tuner = autotvm.tuner.RandomTuner(task)
-        tuner.tune(n_trial=len(task.config_space),
+        tuner.tune(
+                n_trial=len(task.config_space),
+                early_stopping=None,
                 measure_option=measure_option,
-                callbacks=[autotvm.callback.log_to_file('dense.log')])
+                callbacks=[
+                    autotvm.callback.progress_bar(len(task.config_space), prefix=prefix),
+                    autotvm.callback.log_to_file(tmp_log_file)])
 
-        print("\nBest tuner config:")
-        print(tuner.best_config)
+    # Pick best records to a cache file
+    autotvm.record.pick_best(tmp_log_file, log_file)
+    os.remove(tmp_log_file)

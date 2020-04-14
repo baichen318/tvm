@@ -25,11 +25,16 @@ scratch on various systems. It consists of two steps:
 1. First build the shared library from the C++ codes (`libtvm.so` for linux, `libtvm.dylib` for macOS and `libtvm.dll` for windows).
 2. Setup for the language packages (e.g. Python Package).
 
-To get started, clone TVM repo from github. It is important to clone the submodules along, with ``--recursive`` option.
+To get started, download tvm source code from the `Download Page <https://tvm.apache.org/download>`_.
+
+Developers: Get Source from Github
+----------------------------------
+You can also choose to clone the source repo from github.
+It is important to clone the submodules along, with ``--recursive`` option.
 
 .. code:: bash
 
-    git clone --recursive https://github.com/dmlc/tvm
+    git clone --recursive https://github.com/apache/incubator-tvm tvm
 
 For windows users who use github tools, you can open the git shell, and type the following command.
 
@@ -54,15 +59,15 @@ Our goal is to build the shared libraries:
 .. code:: bash
 
     sudo apt-get update
-    sudo apt-get install -y python3 python3-dev python3-setuptools gcc libtinfo-dev zlib1g-dev build-essential cmake
+    sudo apt-get install -y python3 python3-dev python3-setuptools gcc libtinfo-dev zlib1g-dev build-essential cmake libedit-dev libxml2-dev
 
 The minimal building requirements are
 
-- A recent c++ compiler supporting C++ 11 (g++-4.8 or higher)
+- A recent c++ compiler supporting C++ 14 (g++-5 or higher)
 - CMake 3.5 or higher
 - We highly recommend to build with LLVM to enable all the features.
-- It is possible to build TVM without the LLVM dependency if you only want to use CUDA/OpenCL
-- If you want to use the NNVM compiler, then LLVM is required
+- If you want to use CUDA, CUDA toolkit version >= 8.0 is required. If you are upgrading from an older version, make sure you purge the older version and reboot after installation.
+
 
 We use cmake to build the library.
 The configuration of TVM can be modified by `config.cmake`.
@@ -85,7 +90,7 @@ The configuration of TVM can be modified by `config.cmake`.
 
 - TVM optionally depends on LLVM. LLVM is required for CPU codegen that needs LLVM.
 
-  - LLVM 4.0 or higher is needed for build with LLVM. Note that verison of LLVM from default apt may lower than 4.0.
+  - LLVM 4.0 or higher is needed for build with LLVM. Note that version of LLVM from default apt may lower than 4.0.
   - Since LLVM takes long time to build from source, you can download pre-built version of LLVM from
     `LLVM Download Page <http://releases.llvm.org/download.html>`_.
 
@@ -106,14 +111,21 @@ The configuration of TVM can be modified by `config.cmake`.
       cmake ..
       make -j4
 
+  - You can also use Ninja build system instead of Unix Makefiles. It can be faster to build than using Makefiles.
+
+  .. code:: bash
+
+      cd build
+      cmake .. -G Ninja
+      ninja
+
 If everything goes well, we can go to :ref:`python-package-installation`
 
 Building on Windows
 ~~~~~~~~~~~~~~~~~~~
 
 TVM support build via MSVC using cmake. The minimum required VS version is **Visual Studio Community 2015 Update 3**.
-In order to generate the VS solution file using cmake,
-make sure you have a recent version of cmake added to your path and then from the TVM directory:
+In order to generate the VS solution file using cmake, make sure you have a recent version of cmake added to your path and then from the TVM directory:
 
 .. code:: bash
 
@@ -124,7 +136,6 @@ make sure you have a recent version of cmake added to your path and then from th
 This will generate the VS project using the MSVC 14 64 bit generator.
 Open the .sln file in the build directory and build with Visual Studio.
 In order to build with LLVM in windows, you will need to build LLVM from source.
-You need to run build the nnvm by running the same script under the nnvm folder.
 
 Building ROCm support
 ~~~~~~~~~~~~~~~~~~~~~
@@ -157,7 +168,7 @@ Method 1
    .. code:: bash
 
        export TVM_HOME=/path/to/tvm
-       export PYTHONPATH=$TVM_HOME/python:$TVM_HOME/topi/python:$TVM_HOME/nnvm/python:${PYTHONPATH}
+       export PYTHONPATH=$TVM_HOME/python:$TVM_HOME/topi/python:${PYTHONPATH}
 
 
 Method 2
@@ -172,7 +183,6 @@ Method 2
        export MACOSX_DEPLOYMENT_TARGET=10.9  # This is required for mac to avoid symbol conflicts with libstdc++
        cd python; python setup.py install --user; cd ..
        cd topi/python; python setup.py install --user; cd ../..
-       cd nnvm/python; python setup.py install --user; cd ../..
 
 
 Python dependencies
@@ -195,10 +205,11 @@ Python dependencies
 
        pip3 install --user tornado psutil xgboost
 
-   * If you want to parse Relay text format progams, you must use Python 3 and run the following
+   * If you want to build tvm to compile a model, you must use Python 3 and run the following
 
    .. code:: bash
 
+       sudo apt install antlr4
        pip3 install --user mypy orderedset antlr4-python3-runtime
 
 
@@ -226,11 +237,5 @@ tests in TVM. The easiest way to install GTest is from source.
        make
        make install
 
-Now, you'll need to modify ``build/config.cmake`` and change ``set(USE_GTEST
-OFF)`` to ``set(USE_GTEST ON)``.
 
-TVM can then be built `as usual`__.
-
-__ build-shared-library_
-
-After building, the C++ tests can be run with ``make cpptest``.
+After installing GTest, the C++ tests can be built and started with ``./tests/scripts/task_cpp_unittest.sh`` or just built with ``make cpptest``.

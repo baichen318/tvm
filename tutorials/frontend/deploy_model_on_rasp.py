@@ -27,6 +27,7 @@ it on Raspberry Pi.
 """
 
 import tvm
+from tvm import te
 import tvm.relay as relay
 from tvm import rpc
 from tvm.contrib import util, graph_runtime as runtime
@@ -52,7 +53,7 @@ from tvm.contrib.download import download_testdata
 #
 # .. code-block:: bash
 #
-#   git clone --recursive https://github.com/dmlc/tvm
+#   git clone --recursive https://github.com/apache/incubator-tvm tvm
 #   cd tvm
 #   mkdir build
 #   cp cmake/config.cmake build

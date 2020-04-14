@@ -25,13 +25,15 @@
 #ifndef TVM_RELAY_PATTERN_FUNCTOR_H_
 #define TVM_RELAY_PATTERN_FUNCTOR_H_
 
-#include <tvm/node/ir_functor.h>
+#include <tvm/node/functor.h>
+#include <tvm/ir/error.h>
+
 #include <string>
 #include <utility>
 #include <unordered_map>
+
 #include "./expr.h"
 #include "./op.h"
-#include "./error.h"
 #include "./adt.h"
 
 namespace tvm {
@@ -57,8 +59,8 @@ class PatternFunctor;
 
 #define RELAY_PATTERN_FUNCTOR_DISPATCH(OP)                                \
   vtable.template set_dispatch<OP>(                                       \
-      [](const NodeRef& n, TSelf* self, Args... args) {                   \
-        return self->VisitPattern_(static_cast<const OP*>(n.node_.get()), \
+      [](const ObjectRef& n, TSelf* self, Args... args) {                   \
+        return self->VisitPattern_(static_cast<const OP*>(n.get()), \
                                    std::forward<Args>(args)...);          \
       });
 
@@ -66,7 +68,7 @@ template <typename R, typename... Args>
 class PatternFunctor<R(const Pattern& n, Args...)> {
  private:
   using TSelf = PatternFunctor<R(const Pattern& n, Args...)>;
-  using FType = tvm::IRFunctor<R(const NodeRef& n, TSelf* self, Args...)>;
+  using FType = tvm::NodeFunctor<R(const ObjectRef& n, TSelf* self, Args...)>;
 
  public:
   /*! \brief the result type of this functor */
@@ -100,8 +102,11 @@ class PatternFunctor<R(const Pattern& n, Args...)> {
                           Args... args) PATTERN_FUNCTOR_DEFAULT;
   virtual R VisitPattern_(const PatternConstructorNode* op,
                           Args... args) PATTERN_FUNCTOR_DEFAULT;
-  virtual R VisitPatternDefault_(const Node* op, Args...) {
-    throw Error(std::string("Do not have a default for ") + op->type_key());
+  virtual R VisitPattern_(const PatternTupleNode* op,
+                          Args... args) PATTERN_FUNCTOR_DEFAULT;
+  virtual R VisitPatternDefault_(const Object* op, Args...) {
+    LOG(FATAL) << "Do not have a default for " << op->GetTypeKey();
+    throw;
   }
 
  private:
@@ -112,6 +117,7 @@ class PatternFunctor<R(const Pattern& n, Args...)> {
     RELAY_PATTERN_FUNCTOR_DISPATCH(PatternWildcardNode);
     RELAY_PATTERN_FUNCTOR_DISPATCH(PatternVarNode);
     RELAY_PATTERN_FUNCTOR_DISPATCH(PatternConstructorNode);
+    RELAY_PATTERN_FUNCTOR_DISPATCH(PatternTupleNode);
     return vtable;
   }
 };
@@ -127,6 +133,7 @@ class PatternVisitor : public ::tvm::relay::PatternFunctor<void(const Pattern& n
   void VisitPattern_(const PatternWildcardNode* op) override;
   void VisitPattern_(const PatternVarNode* op) override;
   void VisitPattern_(const PatternConstructorNode* op) override;
+  void VisitPattern_(const PatternTupleNode* op) override;
   virtual void VisitType(const Type& t);
   virtual void VisitVar(const Var& v);
   virtual void VisitConstructor(const Constructor& c);
@@ -144,6 +151,7 @@ class PatternMutator
   Pattern VisitPattern_(const PatternWildcardNode* op) override;
   Pattern VisitPattern_(const PatternVarNode* op) override;
   Pattern VisitPattern_(const PatternConstructorNode* op) override;
+  Pattern VisitPattern_(const PatternTupleNode* op) override;
   /*! \brief Used to visit the types inside of patterns.
    *
    * Can be overloaded to transform the types in arbitrary
@@ -156,7 +164,7 @@ class PatternMutator
   /*! \brief Used to visit the vars inside of patterns. */
   virtual Constructor VisitConstructor(const Constructor& c);
  private:
-  std::unordered_map<Var, Var, NodeHash, NodeEqual> var_map_;
+  std::unordered_map<Var, Var, ObjectHash, ObjectEqual> var_map_;
 };
 
 }  // namespace relay

@@ -15,23 +15,20 @@
 # specific language governing permissions and limitations
 # under the License.
 """The interface of expr function exposed from C++."""
-from __future__ import absolute_import
-
-from ... import build_module as _build
-from ... import container as _container
-from ..._ffi.function import _init_api, register_func
+import tvm._ffi
+import tvm.driver
 
 
-@register_func("relay.backend.lower")
+@tvm._ffi.register_func("relay.backend.lower")
 def lower(sch, inputs, func_name, source_func):
     """Backend function for lowering.
 
     Parameters
     ----------
-    sch : tvm.Schedule
+    sch : tvm.te.Schedule
         The schedule.
 
-    inputs : List[tvm.Tensor]
+    inputs : List[tvm.te.Tensor]
         The inputs to the function.
 
     func_name : str
@@ -42,13 +39,14 @@ def lower(sch, inputs, func_name, source_func):
 
     Returns
     -------
-    lowered_funcs : List[tvm.LoweredFunc]
+    mod : tvm.IRModule
         The result of lowering.
     """
+    # pylint: disable=broad-except, import-outside-toplevel
     import traceback
-    # pylint: disable=broad-except
+
     try:
-        f = _build.lower(sch, inputs, name=func_name)
+        f = tvm.driver.lower(sch, inputs, name=func_name)
         # logging.debug("lower function %s", func_name)
         # logging.debug("%s", _build.lower(sch, inputs, simple_mode=True))
     except Exception:
@@ -57,20 +55,17 @@ def lower(sch, inputs, func_name, source_func):
         msg += "-----------------------------\n"
         msg += source_func.astext()
         raise RuntimeError(msg)
-    return f if isinstance(
-        f, (_container.Array, tuple, list)) else [f]
+    return f
 
 
-@register_func("relay.backend.build")
-def build(funcs, target, target_host=None):
+@tvm._ffi.register_func("relay.backend.build")
+def build(mod, target, target_host=None):
     """Backend build function.
 
     Parameters
     ----------
-    funcs : List[tvm.LoweredFunc] or Dict[str, List[tvm.LoweredFunc]]
-        A list of lowered functions or dictionary mapping from targets to
-        lowered functions.
-
+    mod : tvm.IRModule or Dict[str, tvm.IRModule]
+        Input module
 
     target : tvm.Target
         The target to run the code on.
@@ -85,17 +80,17 @@ def build(funcs, target, target_host=None):
     """
     if target_host == "":
         target_host = None
-    return _build.build(funcs, target=target, target_host=target_host)
+    return tvm.driver.build(mod, target=target, target_host=target_host)
 
 
-@register_func("relay._tensor_value_repr")
+@tvm._ffi.register_func("relay._tensor_value_repr")
 def _tensor_value_repr(tvalue):
     return str(tvalue.data.asnumpy())
 
 
-@register_func("relay._constant_repr")
+@tvm._ffi.register_func("relay._constant_repr")
 def _tensor_constant_repr(tvalue):
     return str(tvalue.data.asnumpy())
 
 
-_init_api("relay.backend", __name__)
+tvm._ffi._init_api("relay.backend", __name__)

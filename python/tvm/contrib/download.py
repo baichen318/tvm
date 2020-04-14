@@ -15,9 +15,6 @@
 # specific language governing permissions and limitations
 # under the License.
 """Helper utility for downloading"""
-from __future__ import print_function
-from __future__ import absolute_import as _abs
-
 import os
 import sys
 import time
@@ -48,10 +45,8 @@ def download(url, path, overwrite=False, size_compare=False, verbose=1, retries=
     retries: int, optional
         Number of time to retry download, default at 3.
     """
-    if sys.version_info >= (3,):
-        import urllib.request as urllib2
-    else:
-        import urllib2
+    # pylint: disable=import-outside-toplevel
+    import urllib.request as urllib2
 
     if os.path.isfile(path) and not overwrite:
         if size_compare:
@@ -114,12 +109,14 @@ def download(url, path, overwrite=False, size_compare=False, verbose=1, retries=
                 if os.path.exists(tempfile):
                     os.remove(tempfile)
                 raise err
-            else:
-                print("download failed due to {}, retrying, {} attempt{} left"
-                      .format(repr(err), retries, 's' if retries > 1 else ''))
+            print("download failed due to {}, retrying, {} attempt{} left"
+                  .format(repr(err), retries, 's' if retries > 1 else ''))
 
 
-TEST_DATA_ROOT_PATH = os.path.join(os.path.expanduser('~'), '.tvm_test_data')
+if "TEST_DATA_ROOT_PATH" in os.environ:
+    TEST_DATA_ROOT_PATH = os.environ.get("TEST_DATA_ROOT_PATH")
+else:
+    TEST_DATA_ROOT_PATH = os.path.join(os.path.expanduser('~'), '.tvm_test_data')
 os.makedirs(TEST_DATA_ROOT_PATH, exist_ok=True)
 
 
@@ -152,5 +149,5 @@ def download_testdata(url, relpath, module=None):
     else:
         raise ValueError("Unsupported module: " + module)
     abspath = os.path.join(TEST_DATA_ROOT_PATH, module_path, relpath)
-    download(url, abspath, overwrite=False, size_compare=True)
+    download(url, abspath, overwrite=False, size_compare=False)
     return abspath

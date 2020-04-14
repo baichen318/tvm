@@ -15,10 +15,9 @@
 # specific language governing permissions and limitations
 # under the License.
 """Additional IR Pass for VTA"""
-# pylint: disable=len-as-condition
-from __future__ import absolute_import as _abs
-
+# pylint: disable=len-as-condition, no-else-return
 import tvm
+from tvm import te
 from topi import util
 
 from .environment import get_env
@@ -61,8 +60,8 @@ def fold_uop_loop(stmt_in):
 
     def _fold_outermost_loop(body):
         stmt = body
-        while not isinstance(stmt, tvm.stmt.For):
-            if isinstance(stmt, (tvm.stmt.ProducerConsumer,)):
+        while not isinstance(stmt, tvm.tir.For):
+            if isinstance(stmt, (tvm.tir.ProducerConsumer,)):
                 stmt = stmt.body
             else:
                 return None, body, None
@@ -72,19 +71,19 @@ def fold_uop_loop(stmt_in):
         fail = [False]
 
         def _post_order(op):
-            assert isinstance(op, tvm.expr.Call)
+            assert isinstance(op, tvm.tir.Call)
             base_args = 2
             if op.name == "VTAUopPush":
                 args = []
                 args += op.args[:base_args]
                 for i in range(3):
-                    m = tvm.arith.DetectLinearEquation(
+                    m = tvm.arith.detect_linear_equation(
                         op.args[i + base_args], [loop_var])
                     if not m:
                         fail[0] = True
                         return op
                     if gemm_offsets[i] is not None:
-                        if not tvm.ir_pass.Equal(m[0], gemm_offsets[i]):
+                        if not tvm.ir.structural_equal(m[0], gemm_offsets[i]):
                             fail[0] = True
                             return op
                         args.append(m[1])
@@ -92,29 +91,29 @@ def fold_uop_loop(stmt_in):
                         gemm_offsets[i] = m[0]
                         args.append(m[1])
                 args += op.args[base_args+3:]
-                return tvm.call_extern("int32", "VTAUopPush", *args)
+                return tvm.tir.call_extern("int32", "VTAUopPush", *args)
             if op.name not in ("VTATLSCommandHandle", "tvm_thread_context"):
                 raise RuntimeError("unexpected op %s" % op)
             return op
 
-        ret = tvm.ir_pass.IRTransform(
+        ret = tvm.tir.ir_pass.IRTransform(
             stmt.body, None, _post_order, ["Call"])
 
         if not fail[0] and all(x is not None for x in gemm_offsets):
             def _visit(op):
                 if op.same_as(loop_var):
                     fail[0] = True
-            tvm.ir_pass.PostOrderVisit(ret, _visit)
+            tvm.tir.ir_pass.PostOrderVisit(ret, _visit)
             if not fail[0]:
-                begin = tvm.call_extern(
+                begin = tvm.tir.call_extern(
                     "int32", "VTAUopLoopBegin", stmt.extent, *gemm_offsets)
-                end = tvm.call_extern("int32", "VTAUopLoopEnd")
+                end = tvm.tir.call_extern("int32", "VTAUopLoopEnd")
                 return [begin, ret, end]
         raise ValueError("Failed to fold the GEMM instructions..")
 
     def _do_fold(stmt):
         if (stmt.attr_key == "coproc_uop_scope" and
-                isinstance(stmt.value, tvm.expr.StringImm) and
+                isinstance(stmt.value, tvm.tir.StringImm) and
                 stmt.value.value == env.dev.vta_push_uop.value):
             body = stmt.body
             begins = []
@@ -135,11 +134,11 @@ def fold_uop_loop(stmt_in):
             if body == stmt.body:
                 return stmt
             ends = list(reversed(ends))
-            body = tvm.make.stmt_seq(*(begins + [body] + ends))
-            return tvm.make.AttrStmt(
+            body = tvm.tir.stmt_seq(*(begins + [body] + ends))
+            return tvm.tir.AttrStmt(
                 stmt.node, stmt.attr_key, stmt.value, body)
         return None
-    out = tvm.ir_pass.IRTransform(
+    out = tvm.tir.ir_pass.IRTransform(
         stmt_in, _do_fold, None, ["AttrStmt"])
     return out
 
@@ -165,41 +164,41 @@ def cpu_access_rewrite(stmt_in):
     env = get_env()
     rw_info = {}
     def _post_order(op):
-        if isinstance(op, tvm.stmt.Allocate):
+        if isinstance(op, tvm.tir.Allocate):
             buffer_var = op.buffer_var
             if not buffer_var in rw_info:
                 return None
             new_var = rw_info[buffer_var]
-            let_stmt = tvm.make.LetStmt(
-                new_var, tvm.call_extern(
+            let_stmt = tvm.tir.LetStmt(
+                new_var, tvm.tir.call_extern(
                     "handle", "VTABufferCPUPtr",
                     env.dev.command_handle,
                     buffer_var), op.body)
-            alloc = tvm.make.Allocate(
+            alloc = tvm.tir.Allocate(
                 buffer_var, op.dtype, op.extents,
                 op.condition, let_stmt)
             del rw_info[buffer_var]
             return alloc
-        if isinstance(op, tvm.expr.Load):
+        if isinstance(op, tvm.tir.Load):
             buffer_var = op.buffer_var
             if not buffer_var in rw_info:
-                rw_info[buffer_var] = tvm.var(
+                rw_info[buffer_var] = te.var(
                     buffer_var.name + "_ptr", "handle")
             new_var = rw_info[buffer_var]
-            return tvm.make.Load(op.dtype, new_var, op.index)
-        if isinstance(op, tvm.stmt.Store):
+            return tvm.tir.Load(op.dtype, new_var, op.index)
+        if isinstance(op, tvm.tir.Store):
             buffer_var = op.buffer_var
             if not buffer_var in rw_info:
-                rw_info[buffer_var] = tvm.var(
+                rw_info[buffer_var] = te.var(
                     buffer_var.name + "_ptr", "handle")
             new_var = rw_info[buffer_var]
-            return tvm.make.Store(new_var, op.value, op.index)
+            return tvm.tir.Store(new_var, op.value, op.index)
         raise RuntimeError("not reached")
-    stmt = tvm.ir_pass.IRTransform(
+    stmt = tvm.tir.ir_pass.IRTransform(
         stmt_in, None, _post_order, ["Allocate", "Load", "Store"])
     for buffer_var, new_var in rw_info.items():
-        stmt = tvm.make.LetStmt(
-            new_var, tvm.call_extern(
+        stmt = tvm.tir.LetStmt(
+            new_var, tvm.tir.call_extern(
                 "handle", "VTABufferCPUPtr",
                 env.dev.command_handle,
                 buffer_var), stmt)
@@ -224,15 +223,15 @@ def lift_alloc_to_scope_begin(stmt_in):
         for op in slist:
             if op.body == body:
                 body = op
-            elif isinstance(op, tvm.stmt.Allocate):
-                body = tvm.make.Allocate(
+            elif isinstance(op, tvm.tir.Allocate):
+                body = tvm.tir.Allocate(
                     op.buffer_var, op.dtype,
                     op.extents, op.condition, body)
-            elif isinstance(op, tvm.stmt.AttrStmt):
-                body = tvm.make.AttrStmt(
+            elif isinstance(op, tvm.tir.AttrStmt):
+                body = tvm.tir.AttrStmt(
                     op.node, op.attr_key, op.value, body)
-            elif isinstance(op, tvm.stmt.For):
-                body = tvm.make.For(
+            elif isinstance(op, tvm.tir.For):
+                body = tvm.tir.For(
                     op.loop_var, op.min, op.extent, op.for_type,
                     op.device_api, body)
             else:
@@ -241,27 +240,27 @@ def lift_alloc_to_scope_begin(stmt_in):
         return body
 
     def _pre_order(op):
-        if isinstance(op, tvm.stmt.For):
+        if isinstance(op, tvm.tir.For):
             lift_stmt.append([])
-        elif isinstance(op, tvm.stmt.AttrStmt):
+        elif isinstance(op, tvm.tir.AttrStmt):
             if op.attr_key == "virtual_thread":
                 lift_stmt.append([])
 
     def _post_order(op):
-        if isinstance(op, tvm.stmt.Allocate):
+        if isinstance(op, tvm.tir.Allocate):
             lift_stmt[-1].append(op)
             return op.body
-        if isinstance(op, tvm.stmt.AttrStmt):
+        if isinstance(op, tvm.tir.AttrStmt):
             if op.attr_key == "storage_scope":
                 lift_stmt[-1].append(op)
                 return op.body
             if op.attr_key == "virtual_thread":
                 return _merge_block(lift_stmt.pop() + [op], op.body)
             return op
-        if isinstance(op, tvm.stmt.For):
+        if isinstance(op, tvm.tir.For):
             return _merge_block(lift_stmt.pop() + [op], op.body)
         raise RuntimeError("not reached")
-    stmt = tvm.ir_pass.IRTransform(
+    stmt = tvm.tir.ir_pass.IRTransform(
         stmt_in, _pre_order, _post_order, ["Allocate", "AttrStmt", "For"])
     assert len(lift_stmt) == 1
     return _merge_block(lift_stmt[0], stmt)
@@ -282,9 +281,9 @@ def inject_skip_copy(stmt_in):
     """
     def _do_fold(stmt):
         if _match_pragma(stmt, "skip_dma_copy"):
-            return tvm.make.Evaluate(0)
+            return tvm.tir.Evaluate(0)
         return None
-    return tvm.ir_pass.IRTransform(
+    return tvm.tir.ir_pass.IRTransform(
         stmt_in, _do_fold, None, ["AttrStmt"])
 
 
@@ -305,19 +304,19 @@ def inject_coproc_sync(stmt_in):
     def _do_fold(stmt):
         if _match_pragma(stmt, "coproc_sync"):
             success[0] = True
-            sync = tvm.make.Call(
-                "int32", "vta.coproc_sync", [], tvm.expr.Call.Intrinsic, None, 0)
-            return tvm.make.Block(stmt.body, tvm.make.Evaluate(sync))
+            sync = tvm.tir.Call(
+                "int32", "vta.coproc_sync", [], tvm.tir.Call.Intrinsic, None, 0)
+            return tvm.tir.SeqStmt([stmt.body, tvm.tir.Evaluate(sync)])
         if _match_pragma(stmt, "trim_loop"):
             op = stmt.body
-            assert isinstance(op, tvm.stmt.For)
-            return tvm.make.For(
+            assert isinstance(op, tvm.tir.For)
+            return tvm.tir.For(
                 op.loop_var, op.min, 2, op.for_type,
                 op.device_api, op.body)
         return None
-    stmt = tvm.ir_pass.IRTransform(
+    stmt = tvm.tir.ir_pass.IRTransform(
         stmt_in, None, _do_fold, ["AttrStmt"])
-    stmt = tvm.ir_pass.CoProcSync(stmt)
+    stmt = tvm.tir.ir_pass.CoProcSync(stmt)
     return stmt
 
 
@@ -335,9 +334,12 @@ def inject_dma_intrin(stmt_in):
         Transformed statement
     """
     env = get_env()
+    idxd = tvm.tir.indexdiv
+    idxm = tvm.tir.indexmod
+
     def _check_compact(buf):
         ndim = len(buf.shape)
-        size = tvm.const(1, buf.shape[0].dtype)
+        size = tvm.tir.const(1, buf.shape[0].dtype)
         for i in reversed(range(ndim)):
             if not util.equal_const_int(size - buf.strides[i], 0):
                 raise RuntimeError(
@@ -369,7 +371,7 @@ def inject_dma_intrin(stmt_in):
             x_size = 1
             x_stride = buf.strides[ndim - base]
             next_base = base
-            if not util.equal_const_int(x_stride % elem_block, 0):
+            if not util.equal_const_int(idxm(x_stride, elem_block), 0):
                 raise RuntimeError(
                     "scope %s need to have block=%d, shape=%s, strides=%s" % (
                         scope, elem_block, buf.shape, buf.strides))
@@ -379,7 +381,7 @@ def inject_dma_intrin(stmt_in):
                     break
                 x_size = x_size * buf.shape[k]
                 next_base = i + 1
-            shape.append(tvm.ir_pass.Simplify(x_size))
+            shape.append(tvm.tir.ir_pass.Simplify(x_size))
             strides.append(x_stride)
             assert next_base != base
             base = next_base
@@ -394,7 +396,7 @@ def inject_dma_intrin(stmt_in):
             raise RuntimeError("Expect buffer type to be %s instead of %s" %
                                (dtype, buf.dtype))
         shape, strides = buf.shape, buf.strides
-        if not util.equal_const_int(buf.elem_offset % elem_block, 0):
+        if not util.equal_const_int(idxm(buf.elem_offset, elem_block), 0):
             raise RuntimeError("scope %s need to have block=%d" % (scope, elem_block))
         if allow_fold:
             shape, strides = _fold_buffer_dim(buf, scope, elem_block)
@@ -421,7 +423,7 @@ def inject_dma_intrin(stmt_in):
                 x_size = 1
                 x_stride = 1
                 y_size = 1
-                return x_size, y_size, x_stride, buf.elem_offset / elem_block
+                return x_size, y_size, x_stride, idxd(buf.elem_offset, elem_block)
             if not util.equal_const_int(strides[-2] - elem_block, 0):
                 raise_error()
 
@@ -429,15 +431,15 @@ def inject_dma_intrin(stmt_in):
                 x_size = shape[-2]
                 x_stride = shape[-2]
                 y_size = 1
-                return x_size, y_size, x_stride, buf.elem_offset / elem_block
-            if not util.equal_const_int(strides[-3] % elem_block, 0):
+                return x_size, y_size, x_stride, idxd(buf.elem_offset, elem_block)
+            if not util.equal_const_int(idxm(strides[-3], elem_block), 0):
                 raise_error()
 
             if ndim == 3:
                 x_size = shape[-2]
-                x_stride = strides[-3] / elem_block
+                x_stride = idxd(strides[-3], elem_block)
                 y_size = shape[-3]
-                return x_size, y_size, x_stride, buf.elem_offset / elem_block
+                return x_size, y_size, x_stride, idxd(buf.elem_offset, elem_block)
 
         else:
             if not util.equal_const_int(strides[-1], 1):
@@ -451,7 +453,7 @@ def inject_dma_intrin(stmt_in):
                 x_size = 1
                 x_stride = 1
                 y_size = 1
-                return x_size, y_size, x_stride, buf.elem_offset / elem_block
+                return x_size, y_size, x_stride, idxd(buf.elem_offset, elem_block)
             if not util.equal_const_int(strides[-3], elem_block):
                 raise_error()
 
@@ -459,15 +461,15 @@ def inject_dma_intrin(stmt_in):
                 x_size = shape[-3]
                 x_stride = shape[-3]
                 y_size = 1
-                return x_size, y_size, x_stride, buf.elem_offset / elem_block
-            if not util.equal_const_int(strides[-4] % elem_block, 0):
+                return x_size, y_size, x_stride, idxd(buf.elem_offset, elem_block)
+            if not util.equal_const_int(idxm(strides[-4], elem_block), 0):
                 raise_error()
 
             if ndim == 4:
                 x_size = shape[-3]
-                x_stride = strides[-4] / elem_block
+                x_stride = idxd(strides[-4], elem_block)
                 y_size = shape[-4]
-                return x_size, y_size, x_stride, buf.elem_offset / elem_block
+                return x_size, y_size, x_stride, idxd(buf.elem_offset, elem_block)
 
         raise_error()
 
@@ -490,10 +492,10 @@ def inject_dma_intrin(stmt_in):
             _check_compact(src)
             x_size, y_size, x_stride, offset = _get_2d_pattern(
                 dst, elem_width, elem_bytes, data_type, src.scope, allow_fold=True)
-            irb = tvm.ir_builder.create()
+            irb = tvm.tir.ir_builder.create()
             irb.scope_attr(env.dev.vta_axis, "coproc_scope",
                            env.dev.get_task_qid(task_qid))
-            irb.emit(tvm.call_extern(
+            irb.emit(tvm.tir.call_extern(
                 "int32", "VTAStoreBuffer2D",
                 env.dev.command_handle,
                 src.access_ptr("r", "int32"),
@@ -560,11 +562,11 @@ def inject_dma_intrin(stmt_in):
                 src, elem_width, elem_bytes, data_type,
                 dst.scope, allow_fold=allow_fold)
 
-            irb = tvm.ir_builder.create()
+            irb = tvm.tir.ir_builder.create()
             irb.scope_attr(env.dev.vta_axis, "coproc_scope",
                            env.dev.get_task_qid(task_qid))
 
-            irb.emit(tvm.call_extern(
+            irb.emit(tvm.tir.call_extern(
                 "int32", "VTALoadBuffer2D",
                 env.dev.command_handle,
                 src.data, offset, x_size, y_size, x_stride,
@@ -576,7 +578,150 @@ def inject_dma_intrin(stmt_in):
         else:
             raise RuntimeError("Do not support copy %s->%s" % (src.scope, dst.scope))
 
-    return tvm.ir_pass.InjectCopyIntrin(stmt_in, "dma_copy", _inject_copy)
+    return tvm.tir.ir_pass.InjectCopyIntrin(stmt_in, "dma_copy", _inject_copy)
+
+
+def _get_gemm_intrin_buffer():
+    env = get_env()
+    wgt_lanes = env.WGT_ELEM_BITS // env.WGT_WIDTH
+    assert wgt_lanes == env.BLOCK_OUT * env.BLOCK_IN
+    wgt_shape = (env.BLOCK_OUT, env.BLOCK_IN)
+    assert wgt_shape[0] * wgt_shape[1] == wgt_lanes
+    inp_lanes = env.INP_ELEM_BITS // env.INP_WIDTH
+    assert inp_lanes == env.BATCH * env.BLOCK_IN
+    inp_shape = (env.BATCH, env.BLOCK_IN)
+    assert inp_shape[0] * inp_shape[1] == inp_lanes
+    out_lanes = env.ACC_ELEM_BITS // env.ACC_WIDTH
+    assert out_lanes == env.BATCH * env.BLOCK_OUT
+    out_shape = (env.BATCH, env.BLOCK_OUT)
+    assert out_shape[0] * out_shape[1] == out_lanes
+    wgt = te.placeholder((wgt_shape[0], wgt_shape[1]),
+                         dtype="int%d" % env.WGT_WIDTH,
+                         name=env.wgt_scope)
+    inp = te.placeholder((inp_shape[0], inp_shape[1]),
+                         dtype="int%d" % env.INP_WIDTH,
+                         name=env.inp_scope)
+    k = te.reduce_axis((0, wgt_shape[1]), name="k")
+    out_dtype = "int%d" % env.ACC_WIDTH
+    out = te.compute((out_shape[0], out_shape[1]),
+                     lambda i, j: te.sum(inp[i, k].astype(out_dtype) *
+                                         wgt[j, k].astype(out_dtype),
+                                         axis=[k]),
+                     name="out")
+    wgt_layout = tvm.tir.decl_buffer(
+        wgt.shape, wgt.dtype, env.wgt_scope,
+        scope=env.wgt_scope, offset_factor=wgt_lanes, data_alignment=wgt_lanes)
+    inp_layout = tvm.tir.decl_buffer(
+        inp.shape, inp.dtype, env.inp_scope,
+        scope=env.inp_scope, offset_factor=inp_lanes, data_alignment=inp_lanes)
+    out_layout = tvm.tir.decl_buffer(
+        out.shape, out.dtype, env.acc_scope,
+        scope=env.acc_scope, offset_factor=out_lanes, data_alignment=out_lanes)
+
+    return wgt_layout, inp_layout, out_layout
+
+
+def inject_conv2d_transpose_skip(stmt_in):
+    """Pass to skip 0-weights in conv2d transpose with stride > 1.
+
+    Parameters
+    ----------
+    stmt_in : Stmt
+        Input statement
+
+    Returns
+    -------
+    stmt_out : Stmt
+        Transformed statement
+    """
+    env = get_env()
+    dwgt, dinp, dout = _get_gemm_intrin_buffer()
+
+    calls = []
+    selects = []
+
+    def _find_basics(op):
+        if isinstance(op, tvm.tir.Call):
+            calls.append(op)
+        elif isinstance(op, tvm.tir.Select):
+            selects.append(op)
+
+    def _do_fold(op):
+        if _match_pragma(op, "conv2d_transpose_gemm"):
+            is_init = ".init" in str(op)
+            tvm.tir.ir_pass.PostOrderVisit(op, _find_basics)
+
+            if is_init:
+                # create inner most block
+                irb = tvm.tir.ir_builder.create()
+                dev = env.dev
+                irb.scope_attr(dev.vta_axis, "coproc_scope", dev.get_task_qid(dev.QID_COMPUTE))
+                irb.scope_attr(dev.vta_axis, "coproc_uop_scope", dev.vta_push_uop)
+                irb.emit(tvm.tir.call_extern("int32", "VTAUopPush",
+                                             0, 1,
+                                             dout.access_ptr("rw", "int32"),
+                                             0, 0,
+                                             0, 0, 0))
+                inner = irb.get()
+                # TODO(@tmoreau89): This is only a temporary fix, please take a look.
+                body = op.body.body
+                while isinstance(body, tvm.tir.IfThenElse):
+                    body = body.then_case
+                args = body.args
+                res_tensor = body.func.output(0)
+                tpl = (args[0], 1, args[1], 1, args[2], 1, args[3], 1, 0, 1, 0, env.BLOCK_OUT)
+                inner = tvm.tir.AttrStmt(
+                    [dout, res_tensor], 'buffer_bind_scope',
+                    tvm.tir.call_intrin('handle', 'tvm_tuple', *tpl), inner)
+                return inner
+            else:
+                conv_call, data_call, kernel_call = calls[-3:]
+                pad_data_tensor = data_call.func.output(0)
+                kernel_tensor = kernel_call.func.output(0)
+                res_tensor = conv_call.func.output(0)
+
+                if selects:
+                    condition = selects[0].condition
+                else:
+                    condition = tvm.tir.const(1, 'int')
+
+                # create inner most block
+                irb = tvm.tir.ir_builder.create()
+                with irb.if_scope(condition):
+                    dev = env.dev
+                    irb.scope_attr(dev.vta_axis, "coproc_scope", dev.get_task_qid(dev.QID_COMPUTE))
+                    irb.scope_attr(dev.vta_axis, "coproc_uop_scope", dev.vta_push_uop)
+                    irb.emit(tvm.tir.call_extern("int32", "VTAUopPush",
+                                                 0, 0,
+                                                 dout.access_ptr("rw", "int32"),
+                                                 dinp.access_ptr("r", "int32"),
+                                                 dwgt.access_ptr("r", "int32"),
+                                                 0, 0, 0))
+                inner = irb.get()
+
+                args = conv_call.args
+                tpl = (args[0], 1, args[1], 1, args[2], 1, args[3],
+                       1, 0, 1, 0, env.BLOCK_OUT)
+                inner = tvm.tir.AttrStmt(
+                    [dout, res_tensor], 'buffer_bind_scope',
+                    tvm.tir.call_intrin('handle', 'tvm_tuple', *tpl), inner)
+                args = kernel_call.args
+                tpl = (args[0], 1, args[1], 1, args[2], 1, args[3],
+                       1, 0, env.BLOCK_OUT, 0, env.BLOCK_IN)
+                inner = tvm.tir.AttrStmt(
+                    [dwgt, kernel_tensor], 'buffer_bind_scope',
+                    tvm.tir.call_intrin('handle', 'tvm_tuple', *tpl), inner)
+                args = data_call.args
+                tpl = (args[0], 1, args[1], 1, args[2], 1, args[3],
+                       1, 0, 1, 0, env.BLOCK_IN)
+                inner = tvm.tir.AttrStmt(
+                    [dinp, pad_data_tensor], 'buffer_bind_scope',
+                    tvm.tir.call_intrin('handle', 'tvm_tuple', *tpl), inner)
+                return inner
+        return None
+    ret = tvm.tir.ir_pass.IRTransform(
+        stmt_in, _do_fold, None, ["AttrStmt"])
+    return ret
 
 
 def annotate_alu_coproc_scope(stmt_in):
@@ -595,18 +740,18 @@ def annotate_alu_coproc_scope(stmt_in):
     env = get_env()
     def _do_fold(stmt):
         if _match_pragma(stmt, "alu"):
-            irb = tvm.ir_builder.create()
+            irb = tvm.tir.ir_builder.create()
             irb.scope_attr(env.dev.vta_axis, "coproc_scope",
                            env.dev.get_task_qid(env.dev.QID_COMPUTE))
             irb.scope_attr(env.dev.vta_axis, "coproc_uop_scope",
-                           tvm.make.StringImm("VTAPushALUOp"))
+                           tvm.tir.StringImm("VTAPushALUOp"))
             irb.emit(stmt)
             return irb.get()
         if _match_pragma(stmt, "skip_alu"):
-            return tvm.make.Evaluate(0)
+            return tvm.tir.Evaluate(0)
         return stmt
 
-    stmt_out = tvm.ir_pass.IRTransform(
+    stmt_out = tvm.tir.ir_pass.IRTransform(
         stmt_in, None, _do_fold, ["AttrStmt"])
 
     return stmt_out
@@ -626,9 +771,11 @@ def inject_alu_intrin(stmt_in):
         Transformed statement
     """
     env = get_env()
+    idxm = tvm.tir.indexmod
+
     def _do_fold(stmt):
         def _equal(x, y):
-            return tvm.ir_pass.Equal(tvm.ir_pass.Simplify(x - y), 0)
+            return tvm.ir.structural_equal(tvm.tir.ir_pass.Simplify(x - y), 0)
 
         def _flatten_loop(src_coeff, dst_coeff, extents):
             src_coeff = list(src_coeff)
@@ -647,7 +794,7 @@ def inject_alu_intrin(stmt_in):
                 next_ext = extents.pop()
 
                 if _equal(next_src, vsrc * vext) and _equal(next_dst, vdst * vext):
-                    vext = tvm.ir_pass.Simplify(vext * next_ext)
+                    vext = tvm.tir.ir_pass.Simplify(vext * next_ext)
                 else:
                     rev_src_coeff.append(vsrc)
                     rev_dst_coeff.append(vdst)
@@ -668,7 +815,7 @@ def inject_alu_intrin(stmt_in):
             # Get to the innermost loop body
             loop_body = stmt.body
             nest_size = 0
-            while isinstance(loop_body, tvm.stmt.For):
+            while isinstance(loop_body, tvm.tir.For):
                 loop_body = loop_body.body
                 nest_size += 1
             # Get the src/dst arguments
@@ -683,31 +830,31 @@ def inject_alu_intrin(stmt_in):
                 extents.append(tmp_body.extent)
                 tmp_body = tmp_body.body
             # Derive opcode
-            if isinstance(loop_body.value, tvm.expr.Add):
+            if isinstance(loop_body.value, tvm.tir.Add):
                 alu_opcode = env.dev.ALU_OPCODE_ADD
                 lhs = loop_body.value.a
                 rhs = loop_body.value.b
-            elif isinstance(loop_body.value, tvm.expr.Sub):
+            elif isinstance(loop_body.value, tvm.tir.Sub):
                 alu_opcode = env.dev.ALU_OPCODE_SUB
                 lhs = loop_body.value.a
                 rhs = loop_body.value.b
-            elif isinstance(loop_body.value, tvm.expr.Mul):
+            elif isinstance(loop_body.value, tvm.tir.Mul):
                 alu_opcode = env.dev.ALU_OPCODE_MUL
                 lhs = loop_body.value.a
                 rhs = loop_body.value.b
-            elif isinstance(loop_body.value, tvm.expr.Min):
+            elif isinstance(loop_body.value, tvm.tir.Min):
                 alu_opcode = env.dev.ALU_OPCODE_MIN
                 lhs = loop_body.value.a
                 rhs = loop_body.value.b
-            elif isinstance(loop_body.value, tvm.expr.Max):
+            elif isinstance(loop_body.value, tvm.tir.Max):
                 alu_opcode = env.dev.ALU_OPCODE_MAX
                 lhs = loop_body.value.a
                 rhs = loop_body.value.b
-            elif isinstance(loop_body.value, tvm.expr.Call):
+            elif isinstance(loop_body.value, tvm.tir.Call):
                 if loop_body.value.name == 'shift_left':
                     alu_opcode = env.dev.ALU_OPCODE_SHR
                     lhs = loop_body.value.args[0]
-                    rhs = tvm.ir_pass.Simplify(-loop_body.value.args[1])
+                    rhs = tvm.tir.ir_pass.Simplify(-loop_body.value.args[1])
                 elif loop_body.value.name == 'shift_right':
                     alu_opcode = env.dev.ALU_OPCODE_SHR
                     lhs = loop_body.value.args[0]
@@ -715,42 +862,42 @@ def inject_alu_intrin(stmt_in):
                 else:
                     raise RuntimeError(
                         "Function call not recognized %s" % (loop_body.value.name))
-            elif isinstance(loop_body.value, tvm.expr.Load):
+            elif isinstance(loop_body.value, tvm.tir.Load):
                 alu_opcode = env.dev.ALU_OPCODE_SHR
                 lhs = loop_body.value
-                rhs = tvm.const(0, "int32")
+                rhs = tvm.tir.const(0, "int32")
             else:
                 raise RuntimeError(
                     "Expression not recognized %s, %s, %s" % (
                         type(loop_body.value), str(loop_body.value), str(stmt)))
 
             # Derive array index coefficients
-            dst_coeff = tvm.arith.DetectLinearEquation(dst_idx, indices)
+            dst_coeff = tvm.arith.detect_linear_equation(dst_idx, indices)
             # Check if lhs/rhs is immediate
             use_imm = False
             imm_val = None
-            if isinstance(rhs, tvm.expr.IntImm):
+            if isinstance(rhs, tvm.tir.IntImm):
                 assert lhs.buffer_var.same_as(dst_var)
-                src_coeff = tvm.arith.DetectLinearEquation(lhs.index, indices)
+                src_coeff = tvm.arith.detect_linear_equation(lhs.index, indices)
                 use_imm = True
                 imm_val = rhs
-            if isinstance(lhs, tvm.expr.IntImm):
+            if isinstance(lhs, tvm.tir.IntImm):
                 assert rhs.buffer_var.same_as(dst_var)
-                src_coeff = tvm.arith.DetectLinearEquation(rhs.index, indices)
+                src_coeff = tvm.arith.detect_linear_equation(rhs.index, indices)
                 use_imm = True
                 imm_val = lhs
             if imm_val is None:
                 imm_val = 0
                 assert lhs.buffer_var.same_as(dst_var) and rhs.buffer_var.same_as(dst_var)
-                src_lhs_coeff = tvm.arith.DetectLinearEquation(lhs.index, indices)
-                src_rhs_coeff = tvm.arith.DetectLinearEquation(rhs.index, indices)
+                src_lhs_coeff = tvm.arith.detect_linear_equation(lhs.index, indices)
+                src_rhs_coeff = tvm.arith.detect_linear_equation(rhs.index, indices)
                 # Determine which side has the same coefficients
                 lhs_equal = True
                 rhs_equal = True
                 for i, coef in enumerate(dst_coeff):
-                    if not tvm.ir_pass.Equal(coef, src_lhs_coeff[i]):
+                    if not tvm.ir.structural_equal(coef, src_lhs_coeff[i]):
                         lhs_equal = False
-                    if not tvm.ir_pass.Equal(coef, src_rhs_coeff[i]):
+                    if not tvm.ir.structural_equal(coef, src_rhs_coeff[i]):
                         rhs_equal = False
                 # Make sure at least one of the source is identical to the
                 # destination (in-place computation)
@@ -769,20 +916,20 @@ def inject_alu_intrin(stmt_in):
             assert len(src_coeff) > 1
             assert len(dst_coeff) > 1
             assert len(extents) != 0
-            assert tvm.ir_pass.Equal(
-                tvm.ir_pass.Simplify(
-                    src_coeff[-1] % (env.BATCH * env.BLOCK_OUT)), 0)
-            assert tvm.ir_pass.Equal(
-                tvm.ir_pass.Simplify(
-                    dst_coeff[-1] % (env.BATCH * env.BLOCK_OUT)), 0)
-            assert tvm.ir_pass.Equal(src_coeff[-2], 1)
-            assert tvm.ir_pass.Equal(dst_coeff[-2], 1)
+            assert tvm.ir.structural_equal(
+                tvm.tir.ir_pass.Simplify(
+                    idxm(src_coeff[-1], env.BATCH * env.BLOCK_OUT)), 0)
+            assert tvm.ir.structural_equal(
+                tvm.tir.ir_pass.Simplify(
+                    idxm(dst_coeff[-1], env.BATCH * env.BLOCK_OUT)), 0)
+            assert tvm.ir.structural_equal(src_coeff[-2], 1)
+            assert tvm.ir.structural_equal(dst_coeff[-2], 1)
             if env.BATCH > 1:
                 assert len(src_coeff) > 2
                 assert len(dst_coeff) > 2
                 assert len(extents) > 1
-                assert tvm.ir_pass.Equal(src_coeff[-3], env.BLOCK_OUT)
-                assert tvm.ir_pass.Equal(dst_coeff[-3], env.BLOCK_OUT)
+                assert tvm.ir.structural_equal(src_coeff[-3], env.BLOCK_OUT)
+                assert tvm.ir.structural_equal(dst_coeff[-3], env.BLOCK_OUT)
 
             # Apply tensorization of the loop coefficients
             src_offset = src_coeff[-1]
@@ -798,22 +945,22 @@ def inject_alu_intrin(stmt_in):
             src_coeff.append(src_offset)
             dst_coeff.append(dst_offset)
             src_coeff = [
-                tvm.ir_pass.Simplify(c // (env.BATCH * env.BLOCK_OUT)) for c in src_coeff]
+                tvm.tir.ir_pass.Simplify(c // (env.BATCH * env.BLOCK_OUT)) for c in src_coeff]
             dst_coeff = [
-                tvm.ir_pass.Simplify(c // (env.BATCH * env.BLOCK_OUT)) for c in dst_coeff]
+                tvm.tir.ir_pass.Simplify(c // (env.BATCH * env.BLOCK_OUT)) for c in dst_coeff]
 
             # Flatten the outer loops
             if extents:
                 src_coeff, dst_coeff, extents = _flatten_loop(src_coeff, dst_coeff, extents)
 
             # Insert ALU micro-ops
-            irb = tvm.ir_builder.create()
+            irb = tvm.tir.ir_builder.create()
             for idx, extent in enumerate(extents):
-                irb.emit(tvm.call_extern(
+                irb.emit(tvm.tir.call_extern(
                     "int32", "VTAUopLoopBegin",
                     extent, dst_coeff[idx], src_coeff[idx], 0))
             use_imm = int(use_imm)
-            irb.emit(tvm.call_extern(
+            irb.emit(tvm.tir.call_extern(
                 "int32", "VTAUopPush",
                 1, 0,
                 dst_coeff[len(dst_coeff)-1],
@@ -821,12 +968,12 @@ def inject_alu_intrin(stmt_in):
                 0,
                 alu_opcode, use_imm, imm_val))
             for extent in extents:
-                irb.emit(tvm.call_extern(
+                irb.emit(tvm.tir.call_extern(
                     "int32", "VTAUopLoopEnd"))
             return irb.get()
         return stmt
 
-    stmt_out = tvm.ir_pass.IRTransform(
+    stmt_out = tvm.tir.ir_pass.IRTransform(
         stmt_in, None, _do_fold, ["AttrStmt"])
     return stmt_out
 

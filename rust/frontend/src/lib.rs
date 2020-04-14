@@ -17,7 +17,7 @@
  * under the License.
  */
 
-//! [TVM](https://github.com/dmlc/tvm) is a compiler stack for deep learning systems.
+//! [TVM](https://github.com/apache/incubator-tvm) is a compiler stack for deep learning systems.
 //!
 //! This crate provides an idiomatic Rust API for TVM runtime frontend.
 //!
@@ -29,8 +29,6 @@
 //! desired predictions *all in Rust*.
 //!
 //! Checkout the `examples` repository for more details.
-
-#![feature(box_syntax, type_alias_enum_variants)]
 
 #[macro_use]
 extern crate failure;
@@ -55,10 +53,12 @@ pub use crate::{
     ndarray::NDArray,
     tvm_common::{
         errors as common_errors,
-        ffi::{self, TVMByteArray, TVMType},
+        ffi::{self, DLDataType, TVMByteArray},
         packed_func::{TVMArgValue, TVMRetValue},
     },
 };
+
+pub type DataType = DLDataType;
 
 // Macro to check the return call to TVM runtime shared library.
 macro_rules! check_call {

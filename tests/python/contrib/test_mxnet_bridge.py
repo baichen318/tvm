@@ -17,24 +17,25 @@
 def mxnet_check():
     """This is a simple test function for MXNet bridge
 
-    It is not included as nosetests, because of its dependency on mxnet
+    It is not included as pytests, because of its dependency on mxnet
 
     User can directly run this script to verify correctness.
     """
     import mxnet as mx
     import topi
     import tvm
+    from tvm import te
     import numpy as np
     from tvm.contrib.mxnet import to_mxnet_func
 
     # build a TVM function through topi
     n = 20
     shape = (20,)
-    scale = tvm.var("scale", dtype="float32")
-    x = tvm.placeholder(shape)
-    y = tvm.placeholder(shape)
+    scale = te.var("scale", dtype="float32")
+    x = te.placeholder(shape)
+    y = te.placeholder(shape)
     z = topi.broadcast_add(x, y)
-    zz = tvm.compute(shape, lambda *i: z(*i) * scale)
+    zz = te.compute(shape, lambda *i: z(*i) * scale)
 
     target = tvm.target.cuda()
 

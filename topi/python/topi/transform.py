@@ -14,12 +14,15 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-# pylint: disable=invalid-name,consider-using-enumerate
+# pylint: disable=invalid-name,consider-using-enumerate,redefined-outer-name
 """Injective transformation operators"""
 from __future__ import absolute_import as _abs
 import tvm
+from tvm import te
 import topi
 from . import cpp
+from . import tag
+from .util import within_index, make_idx
 
 
 def expand_dims(a, axis, num_newaxis=1):
@@ -27,7 +30,7 @@ def expand_dims(a, axis, num_newaxis=1):
 
     Parameters
     ----------
-    a : tvm.Tensor
+    a : tvm.te.Tensor
         The tensor to be expanded.
 
     num_newaxis: int, optional
@@ -35,7 +38,7 @@ def expand_dims(a, axis, num_newaxis=1):
 
     Returns
     -------
-    ret : tvm.Tensor
+    ret : tvm.te.Tensor
     """
     return cpp.expand_dims(a, axis, num_newaxis)
 
@@ -61,21 +64,21 @@ def expand_like(a, shape_like, axis):
 
     Parameters
     ----------
-    a : tvm.Tensor
+    a : tvm.te.Tensor
         The tensor to be expanded.
-    shape_like : tvm.Tensor
+    shape_like : tvm.te.Tensor
         The tensor to with target shape.
     axis: list of int
         axis to be expanded on
     Returns
     -------
-    ret : tvm.Tensor
+    ret : tvm.te.Tensor
     """
     odim = len(axis) + len(a.shape)
     if odim != len(shape_like.shape):
         if len(a.shape) == 1 and len(axis) == len(shape_like.shape):
             # A special case: `a` is a scalar represented as a 1-dim tensor
-            return tvm.compute(shape_like.shape, lambda *idxs: a(0))
+            return te.compute(shape_like.shape, lambda *idxs: a(0))
         raise ValueError("shape inconsistent when expand_like ({}, {}, {})".format(
             len(axis), len(a.shape), len(shape_like.shape)))
 
@@ -90,7 +93,7 @@ def expand_like(a, shape_like, axis):
                 indices.append(idxs[i])
                 axis_index += 1
         return a(*indices)
-    return tvm.compute(shape_like.shape, _compute)
+    return te.compute(shape_like.shape, _compute)
 
 
 def transpose(a, axes=None):
@@ -98,7 +101,7 @@ def transpose(a, axes=None):
 
     Parameters
     ----------
-    a : tvm.Tensor
+    a : tvm.te.Tensor
         The tensor to be expanded.
 
     axes: tuple of ints, optional
@@ -106,7 +109,7 @@ def transpose(a, axes=None):
 
     Returns
     -------
-    ret : tvm.Tensor
+    ret : tvm.te.Tensor
     """
     return cpp.transpose(a, axes)
 
@@ -116,7 +119,7 @@ def flip(a, axis=0):
 
     Parameters
     ----------
-    a : tvm.Tensor
+    a : tvm.te.Tensor
         The tensor to be expanded.
 
     axis : int, optional
@@ -124,7 +127,7 @@ def flip(a, axis=0):
 
     Returns
     -------
-    ret : tvm.Tensor
+    ret : tvm.te.Tensor
     """
     return cpp.flip(a, axis)
 
@@ -133,7 +136,7 @@ def strided_slice(a, begin, end, strides=None):
 
     Parameters
     ----------
-    a : tvm.Tensor
+    a : tvm.te.Tensor
         The tensor to be sliced.
 
     begin: list of int
@@ -149,11 +152,99 @@ def strided_slice(a, begin, end, strides=None):
 
     Returns
     -------
-    ret : tvm.Tensor
+    ret : tvm.te.Tensor
     """
     if strides is None:
         strides = []
     return cpp.strided_slice(a, begin, end, strides)
+
+@tvm.te.tag_scope(tag=tag.INJECTIVE+",strided_set")
+def strided_set(a, v, begin, end, strides=None):
+    """Set slice of an array.
+
+    Parameters
+    ----------
+    a : tvm.te.Tensor
+        The tensor to be sliced.
+
+    v : tvm.te.Tensor
+        The values to set
+
+    begin: tvm.te.Tensor
+        The indices to begin with in the slicing.
+
+    end: tvm.te.Tensor
+        Indicies indicating end of the slice.
+
+    strides: tvm.te.Tensor, optional
+        Specifies the stride values, it can be negative
+        in that case, the input tensor will be reversed
+        in that particular axis.
+
+    Returns
+    -------
+    ret : tvm.te.Tensor
+    """
+    n = len(a.shape)
+
+    if len(begin.shape) != 1:
+        raise ValueError("begin should be a vector")
+    if not begin.dtype == 'int32':
+        raise TypeError("begin should be int32")
+    if len(end.shape) != 1:
+        raise ValueError("end should be a vector")
+    if not end.dtype == 'int32':
+        raise TypeError("end should be int32")
+    if strides is not None:
+        if len(strides.shape) != 1:
+            raise ValueError("strides should be a vector")
+        if not strides.dtype == 'int32':
+            raise TypeError("strides should be int32")
+
+    def _max(a, b):
+        return tvm.tir.Select(a > b, a, b)
+
+    if strides is None:
+        strides = [tvm.tir.const(1, 'int32')] * n
+    else:
+        strides = [tvm.tir.if_then_else(strides.shape[0] > i,
+                                        strides[i],
+                                        tvm.tir.const(1, 'int32'))
+                   for i in range(n)]
+
+    begin = [tvm.tir.if_then_else(begin.shape[0] > i,
+                                  begin[i],
+                                  tvm.tir.Select(strides[i] > 0,
+                                                 tvm.tir.const(0, 'int32'),
+                                                 a.shape[i]))
+             for i in range(n)]
+    end = [tvm.tir.if_then_else(end.shape[0] > i,
+                                end[i],
+                                tvm.tir.Select(strides[i] > 0,
+                                               a.shape[i] + 1,
+                                               -(a.shape[i] + 1)))
+           for i in range(n)]
+
+
+    # Convert negative indexes
+    for i in range(n):
+        begin[i] = tvm.tir.if_then_else(begin[i] < 0,
+                                        begin[i] + a.shape[i],
+                                        begin[i])
+        end[i] = tvm.tir.if_then_else(end[i] < 0,
+                                      end[i] + a.shape[i],
+                                      end[i])
+
+    def _select(*indices):
+        from_val = []
+        index_tuple = []
+        for i in range(n):
+            from_val.append(within_index(begin[i], end[i], strides[i], indices[i]))
+            index_tuple.append(
+                make_idx(begin[i], end[i], strides[i], a.shape[i], indices[i]))
+        return tvm.tir.if_then_else(tvm.tir.all(*from_val), v(*index_tuple), a(*indices))
+
+    return te.compute(a.shape, _select, name="strided_set")
 
 
 def reshape(a, newshape):
@@ -161,14 +252,14 @@ def reshape(a, newshape):
 
     Parameters
     ----------
-    a : tvm.Tensor
+    a : tvm.te.Tensor
         The tensor to be reshaped
     newshape : tuple of ints
         The new shape
 
     Returns
     -------
-    ret : tvm.Tensor
+    ret : tvm.te.Tensor
     """
     return cpp.reshape(a, newshape)
 
@@ -178,7 +269,7 @@ def squeeze(a, axis=None):
 
     Parameters
     ----------
-    a : tvm.Tensor
+    a : tvm.te.Tensor
 
     axis : None or int or tuple of ints, optional
         Selects a subset of the single-dimensional entries in the shape.
@@ -186,7 +277,7 @@ def squeeze(a, axis=None):
 
     Returns
     -------
-    squeezed : tvm.Tensor
+    squeezed : tvm.te.Tensor
     """
     return cpp.squeeze(a, axis)
 
@@ -196,7 +287,7 @@ def concatenate(a_tuple, axis=0):
 
     Parameters
     ----------
-    a_tuple : tuple of tvm.Tensor
+    a_tuple : tuple of tvm.te.Tensor
         The arrays to concatenate
 
     axis : int, optional
@@ -204,7 +295,7 @@ def concatenate(a_tuple, axis=0):
 
     Returns
     -------
-    ret : tvm.Tensor
+    ret : tvm.te.Tensor
     """
     return cpp.concatenate(a_tuple, axis)
 
@@ -214,7 +305,7 @@ def stack(a, axis):
 
     Parameters
     ----------
-    a : tvm.Tensor
+    a : tvm.te.Tensor
         The tensor to be stacked.
 
     axis : int, optional
@@ -223,7 +314,7 @@ def stack(a, axis):
 
     Returns
     -------
-    ret : tvm.Tensor
+    ret : tvm.te.Tensor
     """
     return cpp.stack(a, axis)
 
@@ -233,7 +324,7 @@ def split(ary, indices_or_sections, axis=0):
 
     Parameters
     ----------
-    ary : tvm.Tensor
+    ary : tvm.te.Tensor
 
     indices_or_sections : int or 1-D array
 
@@ -241,7 +332,7 @@ def split(ary, indices_or_sections, axis=0):
 
     Returns
     -------
-    ret : tuple of tvm.Tensor
+    ret : tuple of tvm.te.Tensor
     """
     return cpp.split(ary, indices_or_sections, axis)
 
@@ -251,10 +342,10 @@ def take(a, indices, axis=None, mode="clip"):
 
     Parameters
     ----------
-    a : tvm.Tensor
+    a : tvm.te.Tensor
         The source array.
 
-    indices : tvm.Tensor
+    indices : tvm.te.Tensor
         The indices of the values to extract.
 
     axis : int, optional
@@ -269,7 +360,7 @@ def take(a, indices, axis=None, mode="clip"):
 
     Returns
     -------
-    ret : tvm.Tensor
+    ret : tvm.te.Tensor
     """
     if axis is None:
         return cpp.take(a, indices, mode)
@@ -281,15 +372,15 @@ def gather_nd(a, indices):
 
     Parameters
     ----------
-    a : tvm.Tensor
+    a : tvm.te.Tensor
         The source array.
 
-    indices : tvm.Tensor
+    indices : tvm.te.Tensor
         The indices of the values to extract.
 
     Returns
     -------
-    ret : tvm.Tensor
+    ret : tvm.te.Tensor
     """
     return cpp.gather_nd(a, indices)
 
@@ -354,7 +445,7 @@ def arange(start, stop=None, step=1, dtype="float32"):
 
     Returns
     -------
-    result : tvm.Tensor
+    result : tvm.te.Tensor
         The resulting tensor.
     """
     if stop is None:
@@ -368,7 +459,7 @@ def repeat(a, repeats, axis):
 
     Parameters
     ----------
-    a : tvm.Tensor
+    a : tvm.te.Tensor
         The tensor to be repeated.
 
     repeats: int, required
@@ -379,7 +470,7 @@ def repeat(a, repeats, axis):
 
     Returns
     -------
-    ret : tvm.Tensor
+    ret : tvm.te.Tensor
     """
     return cpp.repeat(a, repeats, axis)
 
@@ -389,7 +480,7 @@ def tile(a, reps):
 
     Parameters
     ----------
-    a : tvm.Tensor
+    a : tvm.te.Tensor
         The tensor to be tiled.
 
     reps: tuple of ints, required
@@ -397,7 +488,7 @@ def tile(a, reps):
 
     Returns
     -------
-    ret : tvm.Tensor
+    ret : tvm.te.Tensor
     """
     return cpp.tile(a, reps)
 
@@ -407,7 +498,7 @@ def layout_transform(array, src_layout, dst_layout):
 
     Parameters
     ----------
-    array : tvm.Tensor
+    array : tvm.te.Tensor
         The source array.
 
     src_layout : str
@@ -424,7 +515,7 @@ def shape(array, dtype="int32"):
 
     Parameters
     ----------
-    array : tvm.Tensor
+    array : tvm.te.Tensor
         The source tensor.
 
     dtype : str, optional
@@ -432,7 +523,7 @@ def shape(array, dtype="int32"):
 
     Returns
     -------
-    result : tvm.Tensor
+    result : tvm.te.Tensor
         The resulting tensor.
     """
     return cpp.shape(array, dtype)
@@ -453,11 +544,11 @@ def sequence_mask(data, valid_length, mask_value=0, axis=0):
 
     Parameters
     ----------
-    data : tvm.Tensor
+    data : tvm.te.Tensor
         N-D with shape [MAX_LENGTH, batch_size, ...] or [batch_size, MAX_LENGTH, ...]
         depending on the value of `axis`.
 
-    valid_length : tvm.Tensor
+    valid_length : tvm.te.Tensor
         1-D with shape [batch_size,]
 
     mask_value : float, optional
@@ -468,14 +559,14 @@ def sequence_mask(data, valid_length, mask_value=0, axis=0):
 
     Returns
     -------
-    output : tvm.Tensor
+    output : tvm.te.Tensor
         N-D with shape [MAX_LENGTH, batch_size, ...] or [batch_size, MAX_LENGTH, ...]
         depending on the value of `axis`.
     """
 
     assert len(data.shape) >= 2,\
         "only support data.ndim >= 2, received data.shape = {}".format(data.shape)
-    assert axis == 0 or axis == 1, "only support axis = 0, 1, received axis = {}".format(axis)
+    assert axis in (0, 1), "only support axis = 0, 1, received axis = {}".format(axis)
     return cpp.sequence_mask(data, valid_length, mask_value, axis)
 
 
@@ -484,7 +575,7 @@ def ndarray_size(array, dtype="int32"):
 
     Parameters
     ----------
-    array : tvm.Tensor
+    array : tvm.te.Tensor
         The source tensor.
 
     dtype : str, optional
@@ -492,7 +583,7 @@ def ndarray_size(array, dtype="int32"):
 
     Returns
     -------
-    result : tvm.Tensor
+    result : tvm.te.Tensor
         The resulting tensor.
     """
     return cpp.ndarray_size(array, dtype)
@@ -503,18 +594,85 @@ def where(condition, x, y):
 
     Parameters
     ----------
-    condition : tvm.Tensor
+    condition : tvm.te.Tensor
         The condition array.
 
-    x : tvm.Tensor
+    x : tvm.te.Tensor
         First array to be selected.
 
-    y : tvm.Tensor
+    y : tvm.te.Tensor
         Second array to be selected.
 
     Returns
     -------
-    result : tvm.Tensor
+    result : tvm.te.Tensor
         A Tensor selected from x or y depending on condition.
     """
     return cpp.where(condition, x, y)
+
+def one_hot(indices, on_value, off_value, depth, axis, dtype):
+    """
+    Returns a one-hot tensor where the locations repsented by indices take value on_value,
+    other locations take value off_value.
+    Final dimension is <indices outer dimensions> x depth x <indices inner dimensions>.
+
+    Parameters
+    ----------
+    indices : tvm.te.Tensor
+        Locations to set to on_value.
+
+    on_value : tvm.te.Tensor
+        Value to fill at indices.
+
+    off_value : tvm.te.Tensor
+        Value to fill at all other positions besides indices.
+
+    depth : int
+        Depth of the one-hot dimension.
+
+    axis : int
+        Axis to fill.
+
+    dtype : relay.DataType
+        Data type of the output tensor.
+
+    Returns
+    -------
+    ret : relay.Expr
+        The one-hot tensor.
+
+    Examples
+    --------
+    .. code-block:: python
+
+        indices = [0, 1, 2]
+
+        relay.one_hot(indices, 3) =
+            [[1, 0, 0],
+             [0, 1, 0],
+             [0, 0, 1]]
+    """
+    return cpp.one_hot(indices, on_value, off_value, depth, axis, dtype)
+
+
+def unravel_index(indices, shape):
+    """Convert a flat index or array of flat indices into a tuple of coordinate arrays.
+
+       Example::
+       -   unravel_index([22, 41, 37], [7, 6]) = [[3, 6, 6], [4, 5, 1]]
+
+       Parameters
+       ----------
+       indices : relay.Expr
+           An integer array containing indices.
+
+       shape : relay.Expr
+           The shape of the array.
+
+       Returns
+       -------
+       result : relay.Expr
+           The tuple of coordinate arrays.
+    """
+
+    return cpp.unravel_index(indices, shape)

@@ -15,7 +15,10 @@
 # specific language governing permissions and limitations
 # under the License.
 import numpy as np
+import scipy
+from scipy import special
 import tvm
+from tvm import te
 import topi
 import topi.testing
 from topi import util
@@ -23,7 +26,7 @@ from common import get_all_backend
 
 
 def test_util():
-    x = tvm.const(100, "int32")
+    x = tvm.tir.const(100, "int32")
     assert util.get_const_int(x) == 100
     assert util.get_const_tuple((x, x)) == (100, 100)
 
@@ -36,13 +39,13 @@ def test_ewise():
         low,
         high,
         shape=(20, 3),
-        dtype=tvm.float32,
+        dtype="float32",
         check_round=False,
         skip_name_check=False,
     ):
-        m = tvm.var("m")
-        l = tvm.var("l")
-        A = tvm.placeholder((m, l), dtype=dtype, name="A")
+        m = te.var("m")
+        l = te.var("l")
+        A = te.placeholder((m, l), dtype=dtype, name="A")
 
         B = func(A)
         assert tuple(B.shape) == tuple(A.shape)
@@ -51,7 +54,7 @@ def test_ewise():
         a_np = np.random.uniform(low=low, high=high, size=shape).astype(A.dtype) * 10
         # avoid round check too close to boundary
         if check_round:
-            a_np += ((np.fmod(a_np, 1) - 0.5) < 1e-6) * 1e-5
+            a_np += ((np.abs(np.fmod(a_np, 1)) - 0.5) < 1e-6) * 1e-5
         b_np = f_numpy(a_np)
 
         def check_device(device):
@@ -61,15 +64,85 @@ def test_ewise():
                 return
             print("Running on target: %s" % device)
             with tvm.target.create(device):
-                s = topi.generic.schedule_injective(B)
+                s = topi.testing.get_injective_schedule(device)(B)
             foo = tvm.build(s, [A, B], device, name=name)
             a = tvm.nd.array(a_np, ctx)
             b = tvm.nd.array(np.zeros_like(b_np), ctx)
             foo(a, b)
             tvm.testing.assert_allclose(b.asnumpy(), b_np, rtol=1e-5, atol=1e-5)
 
-        for device in get_all_backend():
-            check_device(device)
+        for target in get_all_backend():
+            check_device(target)
+
+    def test_isnan(
+        low,
+        high,
+        shape=(20, 3),
+        dtype="float32",
+        check_round=False,
+        skip_name_check=False,
+    ):
+        m = te.var("m")
+        l = te.var("l")
+        A = te.placeholder((m, l), dtype=dtype, name="A")
+
+        B = topi.isnan(A)
+        assert tuple(B.shape) == tuple(A.shape)
+        if not skip_name_check:
+            assert B.op.body[0].name == "isnan"
+        a_np = np.random.uniform(low=low, high=high, size=shape).astype(A.dtype) * 10
+        a_np.ravel()[np.random.choice(a_np.size, int(a_np.size * 0.5), replace=False)] = np.nan
+        # avoid round check too close to boundary
+        if check_round:
+            a_np += ((np.abs(np.fmod(a_np, 1)) - 0.5) < 1e-6) * 1e-5
+        b_np = np.isnan(a_np)
+
+        def check_device(device):
+            ctx = tvm.context(device, 0)
+            if not ctx.exist:
+                print("Skip because %s is not enabled" % device)
+                return
+            print("Running on target: %s" % device)
+            with tvm.target.create(device):
+                s = topi.testing.get_injective_schedule(device)(B)
+            foo = tvm.build(s, [A, B], device, name="isnan")
+            a = tvm.nd.array(a_np, ctx)
+            b = tvm.nd.array(np.zeros_like(b_np), ctx)
+            foo(a, b)
+            tvm.testing.assert_allclose(b.asnumpy(), b_np, rtol=1e-5, atol=1e-5)
+
+        for target in get_all_backend():
+            check_device(target)
+
+    def test_infiniteness_ops(topi_op, ref_op, name):
+        for dtype in ['float32', 'float64', 'int32', 'int16']:
+            m = te.var("m")
+            l = te.var("l")
+            A = te.placeholder((m, l), dtype=dtype, name="A")
+            B = topi_op(A)
+            assert tuple(B.shape) == tuple(A.shape)
+
+            a_np = np.random.uniform(size=(8, 8)).astype(A.dtype) * 10
+            if dtype.startswith('float'):
+                a_np.ravel()[np.random.choice(a_np.size, int(a_np.size * 0.5), replace=False)] = np.infty
+                a_np.ravel()[np.random.choice(a_np.size, int(a_np.size * 0.5), replace=False)] = np.nan
+            b_np = ref_op(a_np)
+
+            def check_device(device):
+                ctx = tvm.context(device, 0)
+                if not ctx.exist:
+                    print("Skip because %s is not enabled" % device)
+                    return
+                with tvm.target.create(device):
+                    s = topi.testing.get_injective_schedule(device)(B)
+                foo = tvm.build(s, [A, B], device, name=name)
+                a = tvm.nd.array(a_np, ctx)
+                b = tvm.nd.array(np.zeros_like(b_np), ctx)
+                foo(a, b)
+                tvm.testing.assert_allclose(b.asnumpy(), b_np, rtol=1e-5, atol=1e-5)
+
+            for target in get_all_backend():
+                check_device(target)
 
     test_apply(topi.floor, "floor", np.floor, -100, 100)
     test_apply(topi.ceil, "ceil", np.ceil, -100, 100)
@@ -85,13 +158,19 @@ def test_ewise():
     test_apply(topi.sqrt, "sqrt", np.sqrt, 0, 100)
     test_apply(topi.rsqrt, "rsqrt", lambda x: np.ones_like(x) / np.sqrt(x), 0, 100, skip_name_check=True)
     test_apply(topi.cos, "cos", np.cos, -2.0*np.pi, 2.0*np.pi)
+    test_apply(topi.tan, "tan", np.tan, -2.0*np.pi, 2.0*np.pi, dtype='float32')
+    test_apply(topi.tan, "tan", np.tan, -2.0*np.pi, 2.0*np.pi, dtype='float64')
     test_apply(topi.sin, "sin", np.sin, -2.0*np.pi, 2.0*np.pi)
+    test_apply(topi.erf, "erf", scipy.special.erf, -.1, .1, dtype="float32")
+    test_isnan(-100, 100)
+    test_infiniteness_ops(topi.isfinite, np.isfinite, 'isifinite')
+    test_infiniteness_ops(topi.isinf, np.isinf, 'isinf')
 
 
 def test_cast():
     def verify(from_dtype, to_dtype, low=-100, high=100):
         shape = (5, 4)
-        A = tvm.placeholder(shape, dtype=from_dtype, name="A")
+        A = te.placeholder(shape, dtype=from_dtype, name="A")
         B = topi.cast(A, to_dtype)
 
         if from_dtype == "bool":
@@ -109,7 +188,7 @@ def test_cast():
                 continue
             print("Running on target: %s" % device)
             with tvm.target.create(device):
-                s = topi.generic.schedule_injective(B)
+                s = topi.testing.get_injective_schedule(device)(B)
             foo = tvm.build(s, [A, B], device)
             a = tvm.nd.array(a_np, ctx)
             b = tvm.nd.empty(shape=shape, dtype=to_dtype, ctx=ctx)
@@ -126,7 +205,48 @@ def test_cast():
     verify("bool", "int32")
 
 
+def test_fastmath():
+    def test_apply(
+        func,
+        name,
+        f_numpy,
+        low,
+        high,
+        step,
+        dtype="float32"
+    ):
+        a_np = np.arange(low, high, step).astype(dtype)
+        b_np = f_numpy(a_np)
+        A = te.placeholder(a_np.shape, dtype=dtype, name="A")
+        B = func(A)
+        assert tuple(B.shape) == tuple(A.shape)
+
+        def check_device(device):
+            ctx = tvm.context(device, 0)
+            if not ctx.exist:
+                print("Skip because %s is not enabled" % device)
+                return
+            with tvm.target.create(device):
+                s = topi.generic.schedule_injective(B)
+            func = tvm.build(s, [A, B], device, name=name)
+            a = tvm.nd.array(a_np, ctx)
+            b = tvm.nd.array(np.zeros_like(b_np), ctx)
+            func(a, b)
+            tvm.testing.assert_allclose(b.asnumpy(), b_np, rtol=1e-5, atol=1e-5)
+
+        check_device('llvm')
+        check_device('llvm -device=arm-cpu')
+
+
+    test_apply(topi.fast_exp, "fast_exp", np.exp,
+               low=-88, high=88, step=0.01)
+    test_apply(topi.fast_erf, "fast_erf", scipy.special.erf,
+               low=-10, high=10, step=0.01)
+    test_apply(topi.fast_tanh, "fast_tanh", np.tanh,
+               low=-10, high=10, step=0.01)
+
 if __name__ == "__main__":
     test_util()
     test_ewise()
     test_cast()
+    test_fastmath()

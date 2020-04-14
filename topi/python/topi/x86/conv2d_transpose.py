@@ -16,50 +16,35 @@
 # under the License.
 # pylint: disable=invalid-name,unused-variable,unused-argument,no-member
 """Conv2D Transpose schedule on x86"""
+from tvm import te
+from ..util import traverse_inline
+from .. import nn
+from .conv2d import conv2d_nchw, schedule_conv2d_nchw
 
-import tvm
-from tvm import autotvm
-from .. import generic, tag
-from ..nn.conv2d_transpose import conv2d_transpose_nchw, declaration_conv2d_transpose_impl
+def conv2d_transpose_nchw(data, kernel, strides, padding, out_dtype):
+    data_pad, kernel_transform = \
+        nn.conv2d_transpose_nchw_preprocess(data, kernel, strides, padding, out_dtype)
+    # reuse conv2d_nchw implementation
+    return conv2d_nchw(data_pad, kernel_transform, strides=(1, 1),
+                       padding=(0, 0), dilation=(1, 1), out_dtype=out_dtype)
 
-@autotvm.register_topi_compute(conv2d_transpose_nchw, 'cpu', ['direct'])
-def _declaration_conv2d_transpose(cfg, data, kernel, strides, padding, out_dtype):
-    # TODO cfg is not used for now
-    return declaration_conv2d_transpose_impl(data, kernel, strides, padding, out_dtype)
-
-@autotvm.register_topi_schedule(generic.schedule_conv2d_transpose_nchw, 'cpu', ['direct'])
-def schedule_conv2d_transpose(cfg, outs):
+def schedule_conv2d_transpose_nchw(outs):
     """Create schedule for tensors"""
-    outs = [outs] if isinstance(outs, tvm.tensor.Tensor) else outs
-    s = tvm.create_schedule([x.op for x in outs])
-    scheduled_ops = []
+    outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
+    s = schedule_conv2d_nchw(outs)
+    def _callback(op):
+        if 'unpack_nchwc' in op.tag:
+            conv_out = op.input_tensors[0]
+            # retrieve data
+            data_vec = conv_out.op.input_tensors[0]
+            data_pad = data_vec.op.input_tensors[0]
+            data_dilate = data_pad.op.input_tensors[0]
+            s[data_dilate].compute_inline()
+            s[data_pad].compute_inline()
+            # retrieve kernel
+            kernel_vec = conv_out.op.input_tensors[1]
+            kernel_transform = kernel_vec.op.input_tensors[0]
+            s[kernel_transform].compute_inline()
 
-    def traverse(op):
-        """Traverse operators from computation graph"""
-        # inline all one-to-one-mapping operators except the last stage (output)
-        if tag.is_injective(op.tag):
-            if op not in s.outputs:
-                s[op].compute_inline()
-            for tensor in op.input_tensors:
-                if isinstance(tensor.op, tvm.tensor.ComputeOp) and tensor.op not in scheduled_ops:
-                    traverse(tensor.op)
-
-        if 'conv2d_transpose_nchw' in op.tag:
-            C = op.output(0)
-
-            N, OC, OH, OW = C.op.axis
-            rc, ry, rx = C.op.reduce_axis
-
-            OH, oh = s[C].split(OH, factor=2)
-            OC, oc = s[C].split(OC, factor=32)
-            IC, ic = s[C].split(rc, factor=32)
-
-            s[C].reorder(N, OC, OH, OW, oc, IC, ry, rx, ic)
-            N = s[C].fuse(N, OC)
-            s[C].vectorize(oc)
-            s[C].parallel(N)
-
-        scheduled_ops.append(op)
-
-    traverse(outs[0].op)
+    traverse_inline(s, outs[0].op, _callback)
     return s

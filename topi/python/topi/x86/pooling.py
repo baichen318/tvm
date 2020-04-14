@@ -16,8 +16,7 @@
 # under the License.
 # pylint: disable=invalid-name, unused-variable
 """Schedule for pooling operators"""
-import tvm
-from .. import generic
+from tvm import te
 from .. import tag
 
 def _parallel_sch(sch, oshape, do_vectorize=False):
@@ -59,7 +58,6 @@ def _parallel_sch(sch, oshape, do_vectorize=False):
     sch.parallel(fused)
 
 
-@generic.schedule_pool.register(["cpu"])
 def schedule_pool(outs, layout):
     """Schedule for pool
 
@@ -77,27 +75,34 @@ def schedule_pool(outs, layout):
     sch: Schedule
         The computation schedule for the op.
     """
-    outs = [outs] if isinstance(outs, tvm.tensor.Tensor) else outs
-    s = tvm.create_schedule([x.op for x in outs])
+    outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
+    s = te.create_schedule([x.op for x in outs])
     scheduled_ops = []
 
     def _schedule(PaddedInput, Pool):
-        if isinstance(PaddedInput.op, tvm.tensor.ComputeOp):
+        if isinstance(PaddedInput.op, te.tensor.ComputeOp):
             s[PaddedInput].compute_inline()
         do_vectorize = layout[-1] not in "HWhw"
         _parallel_sch(s[Pool], outs[0].shape, do_vectorize)
 
     def traverse(OP):
-        """Internal travserse function"""
+        """Internal traverse function"""
         # inline all one-to-one-mapping operators except the last stage (output)
         if tag.is_broadcast(OP.tag):
             if OP not in s.outputs:
                 s[OP].compute_inline()
             for tensor in OP.input_tensors:
-                if isinstance(tensor.op, tvm.tensor.ComputeOp) and tensor.op not in scheduled_ops:
+                if isinstance(tensor.op, te.tensor.ComputeOp) and tensor.op not in scheduled_ops:
                     traverse(tensor.op)
         # schedule pool
         elif OP.tag.startswith('pool'):
+            # Average pool accumulation and division happens in different for loops (#3607).
+            # To ensure good parallel support, apply multi-threading on the second loop.
+            if OP != outs[0].op:
+                output = outs[0]
+                output_fused = s[output].fuse(output.op.axis[0], output.op.axis[1])
+                s[output].parallel(output_fused)
+
             PaddedInput = OP.input_tensors[0]
             Pool = OP.output(0)
             _schedule(PaddedInput, Pool)
@@ -110,7 +115,6 @@ def schedule_pool(outs, layout):
     return s
 
 
-@generic.schedule_adaptive_pool.register(["cpu"])
 def schedule_adaptive_pool(outs):
     """Schedule for adaptive pool
 
@@ -125,21 +129,26 @@ def schedule_adaptive_pool(outs):
     sch: Schedule
         The computation schedule for the op.
     """
-    outs = [outs] if isinstance(outs, tvm.tensor.Tensor) else outs
-    s = tvm.create_schedule([x.op for x in outs])
+    outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
+    s = te.create_schedule([x.op for x in outs])
     scheduled_ops = []
 
     def traverse(OP):
-        """Internal travserse function"""
+        """Internal traverse function"""
         # inline all one-to-one-mapping operators except the last stage (output)
         if tag.is_broadcast(OP.tag):
             if OP not in s.outputs:
                 s[OP].compute_inline()
             for tensor in OP.input_tensors:
-                if isinstance(tensor.op, tvm.tensor.ComputeOp) and tensor.op not in scheduled_ops:
+                if isinstance(tensor.op, te.tensor.ComputeOp) and tensor.op not in scheduled_ops:
                     traverse(tensor.op)
         # schedule pool
         elif OP.tag.startswith('adaptive_pool'):
+            if OP != outs[0].op:
+                output = outs[0]
+                output_fused = s[output].fuse(output.op.axis[0], output.op.axis[1])
+                s[output].parallel(output_fused)
+
             Pool = OP.output(0)
             _parallel_sch(s[Pool], outs[0].shape)
         else:

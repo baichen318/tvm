@@ -29,12 +29,11 @@ This is a quick guide to submit a pull request, please also refer to the detaile
     git rebase upstream/master
 
 - Make sure code style check pass by typing the following command, and all the existing test-cases pass.
-  - ``docker/bash.sh tvmai/ci-lint ./tests/scripts/task_lint.sh``
-     (Note: You must install docker beforehand so you can run a docker image.)
+- ``docker/bash.sh tvmai/ci-lint ./tests/scripts/task_lint.sh``. (Note: You must install docker beforehand so you can run a docker image.)
 - Add test-cases to cover the new features or bugfix the patch introduces.
 - Document the code you wrote, see more at :ref:`doc_guide`
-- Send the pull request,  fix the problems reported by automatic checks.
-  Request code reviews from other contributors and improves your patch according to feedbacks.
+- Send the pull request and fix the problems reported by automatic checks.
+- Request code reviews from other contributors and improves your patch according to feedbacks.
 
   - To get your code reviewed quickly, we encourage you to help review others' code so they can do the favor in return.
   - Code review is a shepherding process that helps to improve contributor's code quality.
@@ -51,7 +50,7 @@ We use docker container to create stable CI environments
 that can be deployed to multiple machines.
 You can find the prebuilt images in `<https://hub.docker.com/r/tvmai/>`_ .
 Because we want a relatively stable CI environment and make use of pre-cached image,
-all of the CI images are built and maintained by comitters.
+all of the CI images are built and maintained by committers.
 
 Upgrade of CI images can cause problems and need fixes to accommodate the new env.
 Here is the protocol to update CI image:
@@ -96,7 +95,7 @@ Necessary dependencies:
 
 .. code:: bash
 
-  pip install --user nose Cython
+  pip install --user pytest Cython
 
 If you want to run all tests:
 
@@ -118,4 +117,4 @@ If you want to run a single test:
   export PYTHONPATH=python:topi/python
   rm -rf python/tvm/*.pyc python/tvm/*/*.pyc python/tvm/*/*/*.pyc
 
-  TVM_FFI=ctypes python -m nose -v tests/python/unittest/test_pass_storage_rewrite.py
+  TVM_FFI=ctypes python -m pytest -v tests/python/unittest/test_pass_storage_rewrite.py

@@ -82,21 +82,22 @@ This will create ```build/libtvm_web_runtime.bc``` and ```build/libtvm_web_runti
 
 The general idea is to use TVM as normally and set target to be ```llvm -target=asmjs-unknown-emscripten -system-lib```.
 
-The following code snippet from [tests/web/prepare_test_libs.py](https://github.com/dmlc/tvm/tree/master/tests/web/prepare_test_libs.py) demonstrate
+The following code snippet from [tests/web/prepare_test_libs.py](https://github.com/apache/incubator-tvm/tree/master/tests/web/prepare_test_libs.py) demonstrate
 the compilation process.
 
 ```python
 import tvm
+from tvm import te
 from tvm.contrib import emscripten
 import os
 def prepare_test_libs(base_path):
     target = "llvm -target=asmjs-unknown-emscripten -system-lib"
-    if not tvm.module.enabled(target):
+    if not tvm.runtime.enabled(target):
         raise RuntimeError("Target %s is not enbaled" % target)
-    n = tvm.var("n")
-    A = tvm.placeholder((n,), name='A')
-    B = tvm.compute(A.shape, lambda *i: A(*i) + 1.0, name='B')
-    s = tvm.create_schedule(B.op)
+    n = te.var("n")
+    A = te.placeholder((n,), name='A')
+    B = te.compute(A.shape, lambda *i: A(*i) + 1.0, name='B')
+    s = te.create_schedule(B.op)
     fadd1 = tvm.build(s, [A, B], target, name="add_one")
     obj_path = os.path.join(base_path, "test_add_one.bc")
     fadd1.save(obj_path)
@@ -114,7 +115,7 @@ The result js library is a library that contains both TVM runtime and the compil
 
 ## Run the Generated Library
 
-The following code snippet from [tests/web/test_module_load.js](https://github.com/dmlc/tvm/tree/master/tests/web/test_module_load.js) demonstrate
+The following code snippet from [tests/web/test_module_load.js](https://github.com/apache/incubator-tvm/tree/master/tests/web/test_module_load.js) demonstrate
 how to run the compiled library.
 
 ```js

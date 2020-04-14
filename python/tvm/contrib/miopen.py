@@ -18,9 +18,10 @@
 # pylint: disable-msg=C0103
 import ctypes
 import numpy as np
-from .. import api as _api
-from .. import intrin as _intrin
-from .. import get_global_func as _get_global_func
+import tvm
+import tvm._ffi
+
+from tvm import te
 
 
 def _get_np_int32_array_handle(arr):
@@ -49,7 +50,9 @@ def conv2d_forward(x,
                    pad_w=0,
                    dilation_h=1,
                    dilation_w=1,
-                   conv_mode=0):
+                   conv_mode=0,
+                   data_type=1,
+                   group_count=1):
     """Create an extern op that compute 2D convolution with MIOpen
 
     Parameters
@@ -73,18 +76,25 @@ def conv2d_forward(x,
     conv_mode: int
         0: miopenConvolution
         1: miopenTranspose
-
+    data_type: int
+        0: miopenHalf (fp16)
+        1: miopenFloat (fp32)
+    group_count: int
+        number of groups
     Returns
     -------
     y: Tensor
         The result tensor
     """
-    assert conv_mode == 0, "Transpose convolutions not supported yet."
+    assert (0 <= conv_mode <= 2), "0: miopenConvolution / 1: miopenTranspose / 2: miopenGroupConv"
+    if group_count > 1:
+        conv_mode = 2
     oshape = np.zeros((len(x.shape)), dtype=np.int32)
     xshape = x.shape
     wshape = w.shape
-    setup_func = _get_global_func("tvm.contrib.miopen.conv2d.setup")
+    setup_func = tvm._ffi.get_global_func("tvm.contrib.miopen.conv2d.setup")
     algo = setup_func(conv_mode,
+                      data_type,
                       pad_h,
                       pad_w,
                       stride_h,
@@ -99,13 +109,15 @@ def conv2d_forward(x,
                       wshape[1].value,
                       wshape[2].value,
                       wshape[3].value,
+                      group_count,
                       _get_np_int32_array_handle(oshape))
 
-    return _api.extern(
+    return te.extern(
         list(oshape), [x, w],
-        lambda ins, outs: _intrin.call_packed(
+        lambda ins, outs: tvm.tir.call_packed(
             "tvm.contrib.miopen.conv2d.forward",
             conv_mode,
+            data_type,
             pad_h,
             pad_w,
             stride_h,

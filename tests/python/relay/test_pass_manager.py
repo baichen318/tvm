@@ -16,21 +16,16 @@
 # under the License.
 """Unit tests for relay pass manager."""
 import numpy as np
+import pytest
 
 import tvm
+from tvm import te
 from tvm import relay
 from tvm.relay import ExprFunctor
 from tvm.relay import Function, Call
 from tvm.relay import analysis
 from tvm.relay import transform as _transform
-from tvm.relay.testing import ctx_list
-
-
-def run_infer_type(expr):
-    mod = relay.Module.from_expr(expr)
-    mod = _transform.InferType()(mod)
-    entry = mod["main"]
-    return entry if isinstance(expr, relay.Function) else entry.body
+from tvm.relay.testing import ctx_list, run_infer_type
 
 
 def get_var_func():
@@ -85,9 +80,9 @@ class OptTester():
     """A helper class for testing the pass manager."""
 
     def __init__(self, mod):
-        if not isinstance(mod, relay.Module):
+        if not isinstance(mod, tvm.IRModule):
             raise TypeError("mod is expected to be the type of "
-                            "relay.Module")
+                            "tvm.IRModule")
         self.mod = mod
 
     def analysis(self):
@@ -97,10 +92,10 @@ class OptTester():
     @staticmethod
     def transform(node, ctx=None):
         """Perform optimization on node."""
-        if isinstance(node, relay.Module):
+        if isinstance(node, tvm.IRModule):
             # Add a function to the module and return an updated module.
             gv, func = get_var_func()
-            mod = relay.Module({gv: func})
+            mod = tvm.IRModule({gv: func})
             mod.update(node)
             return mod
         if isinstance(node, relay.Function):
@@ -116,7 +111,7 @@ def get_rand(shape, dtype='float32'):
 def check_func(func, ref_func):
     func = run_infer_type(func)
     ref_func = run_infer_type(ref_func)
-    assert analysis.graph_equal(func, ref_func)
+    assert tvm.ir.structural_equal(func, ref_func)
 
 
 def test_module_pass():
@@ -127,7 +122,7 @@ def test_module_pass():
     y = relay.var("y", tp)
     v_add = relay.GlobalVar("myAdd")
     func = relay.Function([x, y], x + y)
-    mod = relay.Module({v_add: func})
+    mod = tvm.IRModule({v_add: func})
 
     pass_name = "module_pass_test"
     opt_level = 0
@@ -156,10 +151,10 @@ def test_module_pass():
 
     def test_pass_run():
         module_pass = transform
-        assert pass_name in module_pass.astext()
+        assert pass_name in str(module_pass)
 
         updated_mod = module_pass(mod)
-        assert isinstance(updated_mod, relay.Module)
+        assert isinstance(updated_mod, tvm.IRModule)
 
         # Check the abs function in the updated module.
         v_abs, myabs = get_var_func()
@@ -212,11 +207,11 @@ def test_function_class_pass():
     fpass = TestReplaceFunc(f1)
     assert fpass.info.opt_level == 1
     assert fpass.info.name == "TestReplaceFunc"
-    mod = relay.Module.from_expr(f2)
+    mod = tvm.IRModule.from_expr(f2)
     mod = fpass(mod)
     # wrap in expr
-    mod2 = relay.Module.from_expr(f1)
-    assert relay.alpha_equal(mod["main"], mod2["main"])
+    mod2 = tvm.IRModule.from_expr(f1)
+    assert tvm.ir.structural_equal(mod["main"], mod2["main"])
 
 
 def test_function_pass():
@@ -226,7 +221,7 @@ def test_function_pass():
     x = relay.var("x", tp)
     v_log = relay.GlobalVar("myLog")
     log = relay.Function([x], relay.log(x))
-    mod = relay.Module({v_log: log})
+    mod = tvm.IRModule({v_log: log})
 
     pass_name = "function_pass_test"
     opt_level = 1
@@ -259,10 +254,10 @@ def test_function_pass():
 
     def test_pass_run():
         function_pass = transform
-        assert pass_name in function_pass.astext()
+        assert pass_name in str(function_pass)
 
         updated_mod = function_pass(mod)
-        assert isinstance(updated_mod, relay.Module)
+        assert isinstance(updated_mod, tvm.IRModule)
 
         # Check the log function in the updated module.
         new_v_log = updated_mod.get_global_var(v_log.name_hint)
@@ -303,8 +298,8 @@ def test_module_class_pass():
             return mod
 
     x = relay.var("x", shape=(10, 20))
-    m1 = relay.Module.from_expr(relay.Function([x], x))
-    m2 = relay.Module.from_expr(relay.Function([x], relay.log(x)))
+    m1 = tvm.IRModule.from_expr(relay.Function([x], x))
+    m2 = tvm.IRModule.from_expr(relay.Function([x], relay.log(x)))
     fpass = TestPipeline(m2, replace=True)
     assert fpass.info.name == "TestPipeline"
     mod3 = fpass(m1)
@@ -332,7 +327,7 @@ def test_sequential_pass():
     v_log = relay.GlobalVar("myLog")
     log = relay.Function([z], relay.log(z))
 
-    mod = relay.Module({v_sub: sub, v_log: log})
+    mod = tvm.IRModule({v_sub: sub, v_log: log})
 
     def get_ref_log():
         ref_log = relay.Function([x], relay.log(relay.add(x, x)))
@@ -414,7 +409,7 @@ def test_sequential_pass():
     def test_multiple_passes():
         # Reset the current module since mod has been polluted by the previous
         # function pass.
-        mod = relay.Module({v_sub: sub, v_log: log})
+        mod = tvm.IRModule({v_sub: sub, v_log: log})
         passes = [module_pass, function_pass]
         sequential = _transform.Sequential(opt_level=1, passes=passes)
         required = ["mod_transform", "func_transform"]
@@ -494,17 +489,17 @@ def test_sequential_with_scoping():
         relay.transform.AlterOpLayout()
     ])
 
-    mod = relay.Module({"main": before()})
+    mod = tvm.IRModule({"main": before()})
     with relay.build_config(opt_level=3):
         with tvm.target.create("llvm"):
             mod = seq(mod)
 
     zz = mod["main"]
     zexpected = run_infer_type(expected())
-    assert analysis.alpha_equal(zz, zexpected)
+    assert tvm.ir.structural_equal(zz, zexpected)
 
 
-def test_print_ir():
+def test_print_ir(capfd):
     shape = (1, 2, 3)
     tp = relay.TensorType(shape, "float32")
     x = relay.var("x", tp)
@@ -519,53 +514,45 @@ def test_print_ir():
         relay.transform.DeadCodeElimination()
     ])
 
-    def redirect_output(call):
-        """Redirect the C++ logging info."""
-        import sys
-        import os
-        import threading
-        stderr_fileno = sys.stderr.fileno()
-        stderr_save = os.dup(stderr_fileno)
-        stderr_pipe = os.pipe()
-        os.dup2(stderr_pipe[1], stderr_fileno)
-        os.close(stderr_pipe[1])
-        output = ''
+    mod = tvm.IRModule({"main": func})
+    with relay.build_config(opt_level=3):
+        mod = seq(mod)
 
-        def record():
-            nonlocal output
-            while True:
-                data = os.read(stderr_pipe[0], 1024)
-                if not data:
-                    break
-                output += data.decode("utf-8")
+    out = capfd.readouterr().err
 
-        t = threading.Thread(target=record)
-        t.start()
-        call()
-        os.close(stderr_fileno)
-        t.join()
-        os.close(stderr_pipe[0])
-        os.dup2(stderr_save, stderr_fileno)
-        os.close(stderr_save)
-
-        return output
-
-    def run_pass():
-        mod = relay.Module({"main": func})
-        with relay.build_config(opt_level=3):
-            mod = seq(mod)
-
-    out = redirect_output(run_pass)
     assert "Dumping the module IR" in out
     assert "multiply" in out
 
+__TRACE_COUNTER__ = 0
+
+def _tracer(module, info, is_before):
+    global __TRACE_COUNTER__
+    if bool(is_before):
+        __TRACE_COUNTER__ += 1
+
+def test_print_debug_callback():
+    global __TRACE_COUNTER__
+    shape = (1, 2, 3)
+    tp = relay.TensorType(shape, "float32")
+    x = relay.var("x", tp)
+    y = relay.add(x, x)
+    y = relay.multiply(y, relay.const(2, "float32"))
+    func = relay.Function([x], y)
+
+    seq = _transform.Sequential([
+        relay.transform.InferType(),
+        relay.transform.FoldConstant(),
+        relay.transform.DeadCodeElimination()
+    ])
+
+    assert __TRACE_COUNTER__ == 0
+    mod = tvm.IRModule({"main": func})
+
+    with relay.build_config(opt_level=3, trace=_tracer):
+        mod = seq(mod)
+
+    assert __TRACE_COUNTER__ == 4
+
 
 if __name__ == "__main__":
-    test_function_class_pass()
-    test_module_class_pass()
-    test_module_pass()
-    test_function_pass()
-    test_sequential_pass()
-    test_sequential_with_scoping()
-    test_pass_info()
-    test_print_ir()
+    pytest.main()

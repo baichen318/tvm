@@ -29,10 +29,14 @@ In this part of documentation, we share the rationale for the specific choices m
    hybrid_script
    relay_intro
    relay_add_op
+   relay_op_strategy
    relay_pass_infra
    relay_add_pass
+   relay_bring_your_own_codegen
    virtual_machine
    codebase_walkthrough
+   convert_layout
    inferbound
-   nnvm_json_spec
-   nnvm_overview
+   benchmark
+   introduction_to_module_serialization
+   security

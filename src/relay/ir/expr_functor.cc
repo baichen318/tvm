@@ -18,20 +18,173 @@
  */
 
 /*!
- *  Copyright (c) 2019 by Contributors
- * \file src/tvm/relay/expr_mutator.cc
+ * \file src/relay/expr_functor.cc
  * \brief A wrapper around ExprFunctor which functionally updates the AST.
  *
  * ExprMutator uses memoization and self return in order to amortize
  * the cost of using functional updates.
  */
+#include <tvm/ir/type_functor.h>
 #include <tvm/relay/analysis.h>
 #include <tvm/relay/expr_functor.h>
 #include <tvm/relay/pattern_functor.h>
-#include "type_functor.h"
+
+#include <stack>
 
 namespace tvm {
 namespace relay {
+/*!
+ * \brief A function to iteratively traverse dataflow regions of a graph
+ *
+ * ExpandDataflow manually manages a stack and performs DFS to determine the processing
+ * order of nodes in an input graph.
+ *
+ * If it finds a dataflow node (Call, Tuple, TupleGetItem), it checks if the arguments to that node
+ * need to be processed via fcheck_visited. If so, the function pushes those arguments to the stack
+ * and continues iteratively to process the top of the stack. When it finds a node that doesn't
+ * match the dataflow types, or a node who's inputs have all been processed, it visits the current
+ * leaf via fvisit_leaf.
+ *
+ * This function should be used internally to other classes to implement mixed-mode traversals. The
+ * expectation is that fvisit_leaf will perform recursive analysis within mixed-mode traversal if it
+ * hits a non-dataflow node.
+ *
+ * fcheck_visited and fvisit_leaf are templated to encourage compiler inlining.
+ */
+template <typename FCheckVisited, typename FVisitLeaf>
+void ExpandDataflow(Expr expr, FCheckVisited fcheck_visited, FVisitLeaf fvisit_leaf) {
+  std::stack<std::pair<Expr, bool>> stack;
+  auto fpush_to_stack = [&fcheck_visited, &stack](const Expr& expr) {
+    // The second state of the stack indicate whether the child has been
+    // expanded in the pre-order.
+    // NOTE: function will be inlined.
+    if (!fcheck_visited(expr)) {
+      stack.push({expr, false});
+    }
+  };
+  fpush_to_stack(expr);
+  while (stack.size() > 0) {
+    auto node = stack.top().first;
+    if (fcheck_visited(node)) {
+      // if this node was visited through another path
+      // after being added to the stack ignore it.
+      stack.pop();
+    } else if (stack.top().second) {
+      // all the children have already been expanded.
+      // we can just run post order visit on it.
+      fvisit_leaf(node);
+      stack.pop();
+    } else if (const CallNode* op = node.as<CallNode>()) {
+      // mark expanded = true
+      stack.top().second = true;
+      // push the children to the stack in reverse order
+      // to match recursive processing order
+      for (auto it = op->args.rbegin(); it != op->args.rend(); ++it) {
+        fpush_to_stack(*it);
+      }
+      fpush_to_stack(op->op);
+    } else if (const TupleNode* op = node.as<TupleNode>()) {
+      stack.top().second = true;
+      // push the children to the stack in reverse order
+      // to match recursive processing order
+      for (auto it = op->fields.rbegin(); it != op->fields.rend(); ++it) {
+        fpush_to_stack(*it);
+      }
+    } else if (const TupleGetItemNode* op = node.as<TupleGetItemNode>()) {
+      stack.top().second = true;
+      fpush_to_stack(op->tuple);
+    } else {
+      // No need to expand the children directly run visit.
+      fvisit_leaf(node);
+      stack.pop();
+    }
+  }
+}
+
+MixedModeVisitor::MixedModeVisitor(int visit_limit) {
+  CHECK(visit_limit > 0) << "Dataflow visit limit must be greater than 0";
+  CHECK(visit_limit < 10) << "Dataflow visit limit must be less than 10";
+  visit_limit_ = visit_limit;
+}
+
+void MixedModeVisitor::VisitLeaf(const Expr& expr) {
+  if (visit_counter_[expr.get()] < visit_limit_) {
+    ExprFunctor::VisitExpr(expr);
+  }
+  visit_counter_[expr.get()]++;
+}
+
+bool MixedModeVisitor::CheckVisited(const Expr& expr) {
+  if (visit_counter_[expr.get()] < visit_limit_) {
+    return false;
+  } else {
+    visit_counter_[expr.get()]++;
+    return true;
+  }
+}
+
+void MixedModeVisitor::VisitExpr(const Expr& expr) {
+  auto fcheck_visited = [this](const Expr& expr) { return this->CheckVisited(expr); };
+  auto fvisit_leaf = [this](const Expr& expr) { return this->VisitLeaf(expr); };
+  if (visit_counter_[expr.get()] < visit_limit_) {
+    ExpandDataflow(expr, fcheck_visited, fvisit_leaf);
+  }
+}
+
+// Overwrite the VisitExpr so we don't recurse for dataflow nodes
+void MixedModeVisitor::VisitExpr_(const CallNode* op) {}
+
+// Overwrite the VisitExpr so we don't recurse for dataflow nodes
+void MixedModeVisitor::VisitExpr_(const TupleNode* op) {}
+
+// Overwrite the VisitExpr so we don't recurse for dataflow nodes
+void MixedModeVisitor::VisitExpr_(const TupleGetItemNode* op) {}
+
+void MixedModeMutator::VisitLeaf(const Expr& expr) {
+  if (!memo_.count(expr)) {
+    this->DispatchVisitExpr(expr);
+  }
+}
+
+bool MixedModeMutator::CheckVisited(const Expr& expr) {
+  if (memo_.count(expr)) {
+    return true;
+  } else {
+    return false;
+  }
+}
+
+Expr MixedModeMutator::DispatchVisitExpr(const Expr& expr) {
+  return ExprMutator::VisitExpr(expr);
+}
+
+Expr MixedModeMutator::VisitExpr(const Expr& expr) {
+  auto fcheck_visited = [this](const Expr& expr) { return this->CheckVisited(expr); };
+  auto fvisit_leaf = [this](const Expr& expr) { return this->VisitLeaf(expr); };
+  if (memo_.count(expr)) {
+    return memo_[expr];
+  } else {
+    ExpandDataflow(expr, fcheck_visited, fvisit_leaf);
+    Expr ret = this->DispatchVisitExpr(expr);
+    memo_[expr] = ret;
+    return ret;
+  }
+}
+
+class PostOrderRewriter : public MixedModeMutator {
+ public:
+  explicit PostOrderRewriter(ExprRewriter* rewriter) : rewriter_(rewriter) {}
+  Expr DispatchVisitExpr(const Expr& expr) final {
+    auto post = ExprFunctor::VisitExpr(expr);
+    return rewriter_->Rewrite(expr, post);
+  }
+ protected:
+  ExprRewriter* rewriter_;
+};
+
+Expr PostOrderRewrite(const Expr& expr, ExprRewriter* rewriter) {
+  return PostOrderRewriter(rewriter).VisitExpr(expr);
+}
 
 Expr ExprMutator::VisitExpr(const Expr& expr) {
   auto it = this->memo_.find(expr);
@@ -48,7 +201,7 @@ Expr ExprMutator::VisitExpr_(const VarNode* op) {
   if (op->type_annotation.defined()) {
     auto type = this->VisitType(op->type_annotation);
     if (!op->type_annotation.same_as(type)) {
-      return VarNode::make(op->vid, type);
+      return Var(op->vid, type);
     }
   }
   // default case return self.
@@ -79,7 +232,7 @@ Expr ExprMutator::VisitExpr_(const TupleNode* op) {
   if (all_fields_unchanged) {
     return GetRef<Expr>(op);
   } else {
-    return TupleNode::make(fields);
+    return Tuple(fields);
   }
 }
 
@@ -110,7 +263,7 @@ Expr ExprMutator::VisitExpr_(const FunctionNode* op) {
       body.same_as(op->body)) {
     return GetRef<Expr>(op);
   } else {
-    return FunctionNode::make(params, body, ret_type, ty_params, op->attrs);
+    return Function(params, body, ret_type, ty_params, op->attrs);
   }
 }
 
@@ -135,7 +288,7 @@ Expr ExprMutator::VisitExpr_(const CallNode* call_node) {
   if (unchanged) {
     return GetRef<Expr>(call_node);
   } else {
-    return CallNode::make(new_op, call_args, call_node->attrs, ty_args);
+    return Call(new_op, call_args, call_node->attrs, ty_args);
   }
 }
 
@@ -149,7 +302,7 @@ Expr ExprMutator::VisitExpr_(const LetNode* op) {
       body.same_as(op->body)) {
     return GetRef<Expr>(op);
   } else {
-    return LetNode::make(var, value, body);
+    return Let(var, value, body);
   }
 }
 
@@ -162,7 +315,7 @@ Expr ExprMutator::VisitExpr_(const IfNode* op) {
       op->false_branch.same_as(false_b)) {
     return GetRef<Expr>(op);;
   } else {
-    return IfNode::make(guard, true_b, false_b);
+    return If(guard, true_b, false_b);
   }
 }
 
@@ -171,7 +324,7 @@ Expr ExprMutator::VisitExpr_(const TupleGetItemNode* g) {
   if (g->tuple == t) {
     return GetRef<Expr>(g);
   } else {
-    return TupleGetItemNode::make(t, g->index);
+    return TupleGetItem(t, g->index);
   }
 }
 
@@ -180,7 +333,7 @@ Expr ExprMutator::VisitExpr_(const RefCreateNode* op) {
   if (value.same_as(op->value)) {
     return GetRef<Expr>(op);
   } else {
-    return RefCreateNode::make(value);
+    return RefCreate(value);
   }
 }
 
@@ -189,7 +342,7 @@ Expr ExprMutator::VisitExpr_(const RefReadNode* op) {
   if (ref.same_as(op->ref)) {
     return GetRef<Expr>(op);
   } else {
-    return RefReadNode::make(ref);
+    return RefRead(ref);
   }
 }
 
@@ -199,7 +352,7 @@ Expr ExprMutator::VisitExpr_(const RefWriteNode* op) {
   if (ref.same_as(op->ref) && value.same_as(op->value)) {
     return GetRef<Expr>(op);
   } else {
-    return RefWriteNode::make(ref, value);
+    return RefWrite(ref, value);
   }
 }
 
@@ -212,12 +365,12 @@ Expr ExprMutator::VisitExpr_(const MatchNode* m) {
   for (const Clause& p : m->clauses) {
     clauses.push_back(VisitClause(p));
   }
-  return MatchNode::make(VisitExpr(m->data), clauses, m->complete);
+  return Match(Mutate(m->data), clauses, m->complete);
 }
 
 Clause ExprMutator::VisitClause(const Clause& c) {
   Pattern p = VisitPattern(c->lhs);
-  return ClauseNode::make(p, VisitExpr(c->rhs));
+  return Clause(p, Mutate(c->rhs));
 }
 
 Pattern ExprMutator::VisitPattern(const Pattern& p) { return p; }
@@ -341,15 +494,15 @@ class ExprApplyVisit : public ExprVisitor {
 
  private:
   std::function<void(const Expr&)> f_;
-  std::unordered_set<const Node*> visited_;
+  std::unordered_set<const Object*> visited_;
 };
 
 void PostOrderVisit(const Expr& e, std::function<void(const Expr&)> fvisit) {
   ExprApplyVisit(fvisit).VisitExpr(e);
 }
 
-TVM_REGISTER_API("relay._analysis.post_order_visit")
-.set_body_typed<void(Expr, PackedFunc)>([](Expr expr, PackedFunc f) {
+TVM_REGISTER_GLOBAL("relay.analysis.post_order_visit")
+.set_body_typed([](Expr expr, PackedFunc f) {
     PostOrderVisit(expr, [f](const Expr& n) {
         f(n);
       });
@@ -392,7 +545,7 @@ class ExprBinder : public ExprMutator, PatternMutator {
 
   Clause VisitClause(const Clause& c) final {
     Pattern pat = VisitPattern(c->lhs);
-    return ClauseNode::make(pat, VisitExpr(c->rhs));
+    return Clause(pat, VisitExpr(c->rhs));
   }
 
   Var VisitVar(const Var& v) final {
@@ -418,12 +571,12 @@ Expr Bind(const Expr& expr, const tvm::Map<Var, Expr>& args_map) {
         new_params.size() == func->params.size()) {
       return expr;
     }
-    auto ret = FunctionNode::make(new_params,
+    auto ret = Function(new_params,
                                   new_body,
                                   func->ret_type,
                                   func->type_params,
                                   func->attrs);
-    std::unordered_set<Var, NodeHash, NodeEqual> set;
+    std::unordered_set<Var, ObjectHash, ObjectEqual> set;
     for (const auto& v : FreeVars(expr)) {
       set.insert(v);
     }
@@ -432,7 +585,7 @@ Expr Bind(const Expr& expr, const tvm::Map<Var, Expr>& args_map) {
         new_params.push_back(v);
       }
     }
-    ret = FunctionNode::make(new_params,
+    ret = Function(new_params,
                              new_body,
                              func->ret_type,
                              func->type_params,
@@ -444,14 +597,13 @@ Expr Bind(const Expr& expr, const tvm::Map<Var, Expr>& args_map) {
   }
 }
 
-
-TVM_REGISTER_API("relay._expr.Bind")
+TVM_REGISTER_GLOBAL("relay.ir.Bind")
 .set_body([](TVMArgs args, TVMRetValue* ret) {
-    NodeRef input = args[0];
-    if (input->derived_from<ExprNode>()) {
+    ObjectRef input = args[0];
+    if (input->IsInstance<ExprNode>()) {
       *ret = Bind(Downcast<Expr>(input), args[1]);
     } else {
-      CHECK(input->derived_from<TypeNode>());
+      CHECK(input->IsInstance<TypeNode>());
       *ret = Bind(Downcast<Type>(input), args[1]);
     }
   });

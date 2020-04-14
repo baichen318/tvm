@@ -24,17 +24,16 @@
 
 #include <dmlc/any.h>
 #include <dmlc/json.h>
-#include <tvm/node/ir_functor.h>
+#include <tvm/ir/module.h>
 #include <tvm/relay/expr_functor.h>
 #include <tvm/runtime/device_api.h>
-
 
 #include <list>
 #include <string>
 #include <vector>
 
-#include "utils.h"
 #include "compile_engine.h"
+#include "utils.h"
 
 namespace tvm {
 namespace relay {
@@ -47,15 +46,16 @@ class GraphOpNode;
 using IntegerArray = Array<Integer>;
 using ShapeVector = std::vector<std::vector<int64_t> >;
 using GraphAttrs = std::unordered_map<std::string, dmlc::any>;
-using GraphNodePtr = std::shared_ptr<GraphNode>;
-using GraphInputNodePtr = std::shared_ptr<GraphInputNode>;
-using GraphOpNodePtr = std::shared_ptr<GraphOpNode>;
+using GraphObjectPtr = std::shared_ptr<GraphNode>;
+using GraphInputObjectPtr = std::shared_ptr<GraphInputNode>;
+using GraphOpObjectPtr = std::shared_ptr<GraphOpNode>;
 using TargetsMap = std::unordered_map<int, Target>;
 
 /*! \brief Lowered outputs */
 struct LoweredOutput {
   std::string graph_json;
-  Map<std::string, Array<LoweredFunc> > lowered_funcs;
+  Map<std::string, IRModule> lowered_funcs;
+  Array<tvm::runtime::Module> external_mods;
   std::unordered_map<std::string, tvm::runtime::NDArray> params;
 };
 
@@ -189,11 +189,9 @@ class GraphOpNode : public GraphNode {
 };
 
 /*! \brief Code generator for graph runtime */
-class GraphRuntimeCodegen
-    : public ::tvm::relay::ExprFunctor<std::vector<GraphNodeRef>(const Expr&)> {
+class GraphRuntimeCodegen : public backend::MemoizedExprTranslator<std::vector<GraphNodeRef>> {
  public:
-  GraphRuntimeCodegen(runtime::Module* mod, const TargetsMap& targets)
-      : mod_(mod) {
+  GraphRuntimeCodegen(runtime::Module* mod, const TargetsMap& targets) : mod_(mod) {
     compile_engine_ = CompileEngine::Global();
     targets_ = targets;
   }
@@ -213,20 +211,16 @@ class GraphRuntimeCodegen
     LoweredOutput ret;
     ret.graph_json = os.str();
     ret.params = params_;
+
     for (auto& kv : lowered_funcs_) {
       if (ret.lowered_funcs.count(kv.first) == 0) {
-        ret.lowered_funcs.Set(kv.first, Array<LoweredFunc>());
+        ret.lowered_funcs.Set(kv.first, IRModule::Empty());
       }
-      auto& vec = ret.lowered_funcs[kv.first];
-      Array<LoweredFunc> tmp;
-      for (auto f : kv.second) {
-        tmp.push_back(f);
-      }
-      for (auto f : vec) {
-        tmp.push_back(f);
-      }
-      ret.lowered_funcs.Set(kv.first, tmp);
+      auto& mod = ret.lowered_funcs[kv.first];
+      mod->Update(kv.second);
+      ret.lowered_funcs.Set(kv.first, mod);
     }
+    ret.external_mods = compile_engine_->LowerExternalFunctions();
     return ret;
   }
 
@@ -240,7 +234,7 @@ class GraphRuntimeCodegen
   std::vector<int64_t> _ShapeToJSON(tvm::Array<IndexExpr> shape) {
     std::vector<int64_t> ret;
     for (IndexExpr dim : shape) {
-      const int64_t* pval = as_const_int(dim);
+      const int64_t* pval = tir::as_const_int(dim);
       ret.push_back(*pval);
     }
     return ret;
@@ -253,7 +247,7 @@ class GraphRuntimeCodegen
    * \param expr
    * \return std::vector<_NodeRef>
    */
-  std::vector<GraphNodeRef> AddNode(GraphNodePtr node, Expr expr) {
+  std::vector<GraphNodeRef> AddNode(GraphObjectPtr node, Expr expr) {
     auto checked_type = expr->checked_type();
     size_t count = storage_device_map_.count(expr);
     CHECK_GT(count, 0) << "Expr is not existing in storage plan";
@@ -292,7 +286,7 @@ class GraphRuntimeCodegen
           shape.emplace_back(_ShapeToJSON(typ->shape));
           dtype.emplace_back(DType2String(typ->dtype));
         } else {
-          LOG(FATAL) << "type " << checked_type->type_key() << " not supported";
+          LOG(FATAL) << "type " << checked_type->GetTypeKey() << " not supported";
         }
       }
       CHECK_EQ(node->Type(), kGraphOpNode);
@@ -311,50 +305,9 @@ class GraphRuntimeCodegen
       node->attrs_["shape"] = shape;
       node->attrs_["dtype"] = dtype;
     } else {
-      LOG(FATAL) << "type " << checked_type->type_key() << " not supported";
+      LOG(FATAL) << "type " << checked_type->GetTypeKey() << " not supported";
     }
     return {GraphNodeRef(node_id, 0)};
-  }
-
-  /*! \brief Visitors */
-  std::unordered_map<Expr, std::vector<GraphNodeRef>, NodeHash, NodeEqual> visitor_cache_;
-
-  std::vector<GraphNodeRef> VisitExpr(const Expr& expr) override {
-    if (visitor_cache_.count(expr)) return visitor_cache_.at(expr);
-    std::vector<GraphNodeRef> res;
-    if (expr.as<ConstantNode>()) {
-      res = VisitExpr_(expr.as<ConstantNode>());
-    } else if (expr.as<TupleNode>()) {
-      res = VisitExpr_(expr.as<TupleNode>());
-    } else if (expr.as<VarNode>()) {
-      res = VisitExpr_(expr.as<VarNode>());
-    } else if (expr.as<GlobalVarNode>()) {
-      res = VisitExpr_(expr.as<GlobalVarNode>());
-    } else if (expr.as<FunctionNode>()) {
-      res = VisitExpr_(expr.as<FunctionNode>());
-    } else if (expr.as<CallNode>()) {
-      res = VisitExpr_(expr.as<CallNode>());
-    } else if (expr.as<LetNode>()) {
-      res = VisitExpr_(expr.as<LetNode>());
-    } else if (expr.as<IfNode>()) {
-      res = VisitExpr_(expr.as<IfNode>());
-    } else if (expr.as<OpNode>()) {
-      res = VisitExpr_(expr.as<OpNode>());
-    } else if (expr.as<TupleGetItemNode>()) {
-      res = VisitExpr_(expr.as<TupleGetItemNode>());
-    } else if (expr.as<RefCreateNode>()) {
-      res = VisitExpr_(expr.as<RefCreateNode>());
-    } else if (expr.as<RefReadNode>()) {
-      res = VisitExpr_(expr.as<RefReadNode>());
-    } else if (expr.as<RefWriteNode>()) {
-      res = VisitExpr_(expr.as<RefWriteNode>());
-    } else if (expr.as<ConstructorNode>()) {
-      res = VisitExpr_(expr.as<ConstructorNode>());
-    } else if (expr.as<MatchNode>()) {
-      res = VisitExpr_(expr.as<MatchNode>());
-    }
-    visitor_cache_[expr] = res;
-    return res;
   }
 
   std::vector<GraphNodeRef> VisitExpr_(const VarNode* op) override {
@@ -381,6 +334,25 @@ class GraphRuntimeCodegen
     }
     return fields;
   }
+
+  std::vector<GraphNodeRef> GraphAddCallNode(const CallNode* op,
+                                             const std::string& op_name,
+                                             const std::string& func_name) {
+    std::vector<GraphNodeRef> inputs;
+    for (auto arg : op->args) {
+      auto res = VisitExpr(arg);
+      for (auto nr : res) {
+        inputs.push_back(nr);
+      }
+    }
+    auto node = GraphOpNode::make_node_ptr(op_name,
+                                           GraphAttrs(),
+                                           func_name,
+                                           inputs,
+                                           GraphAttrs());
+    return AddNode(node, GetRef<Expr>(op));
+  }
+
   std::vector<GraphNodeRef> VisitExpr_(const CallNode* op) override {
     Expr expr = GetRef<Expr>(op);
     Function func;
@@ -392,24 +364,33 @@ class GraphRuntimeCodegen
     } else if (op->op.as<FunctionNode>()) {
       func = GetRef<Function>(op->op.as<FunctionNode>());
     } else {
-      LOG(FATAL) << "TVM runtime does not support calls to " << op->op->type_key();
+      LOG(FATAL) << "TVM runtime does not support calls to " << op->op->GetTypeKey();
     }
-    if (!func->IsPrimitive()) {
+    if (!func->HasNonzeroAttr(attr::kPrimitive)) {
       LOG(FATAL) << "TVM only support calls to primitive functions "
                  << "(i.e functions composed of fusable operator invocations)";
     }
 
-    CHECK_GE(storage_device_map_.count(expr), 0);
     auto pf0 = GetPackedFunc("relay.backend._make_CCacheKey");
     auto pf1 = GetPackedFunc("relay.backend._CompileEngineLower");
+    Target target;
+    // Handle external function
+    if (func->GetAttr<String>(attr::kCompiler).defined()) {
+      target = tvm::target::ext_dev();
+      CCacheKey key = (*pf0)(func, target);
+      CachedFunc ext_func = (*pf1)(compile_engine_, key);
+      CHECK(ext_func.defined()) << "External function is not defined.";
+      return GraphAddCallNode(op, ext_func->func_name, ext_func->func_name);
+    }
+
+    CHECK_GE(storage_device_map_.count(expr), 0);
     auto &device_type = storage_device_map_[expr][1];
     auto call_dev_type = device_type[0]->value;
-    Target target;
+    // Normal Relay Function
     if (targets_.size() == 1) {
        // homogeneous execution.
-       for (auto kv : targets_) {
-         target = kv.second;
-       }
+      const auto& it = targets_.begin();
+      target = (*it).second;
     } else {
       // heterogeneous execution.
       std::string call_dev_name;
@@ -425,28 +406,14 @@ class GraphRuntimeCodegen
       target = targets_[call_dev_type];
     }
     CCacheKey key = (*pf0)(func, target);
-    CachedFunc lowerd_func = (*pf1)(compile_engine_, key);
+    CachedFunc lowered_func = (*pf1)(compile_engine_, key);
     if (!lowered_funcs_.count(target->str())) {
-      lowered_funcs_[target->str()] = {};
+      lowered_funcs_[target->str()] = IRModule::Empty();
     }
-    for (auto f : lowerd_func->funcs) {
-      lowered_funcs_[target->str()].insert(f);
-    }
-
-    std::vector<GraphNodeRef> inputs;
-    for (auto arg : op->args) {
-      auto res = VisitExpr(arg);
-      for (auto nr : res) {
-        inputs.push_back(nr);
-      }
-    }
-    auto& op_name = lowerd_func->func_name;
-    auto node = GraphOpNode::make_node_ptr(_GetUniqueName(op_name),
-                                           GraphAttrs(),
-                                           op_name,
-                                           inputs,
-                                           GraphAttrs());
-    return AddNode(node, expr);
+    lowered_funcs_[target->str()]->Update(lowered_func->funcs);
+    return GraphAddCallNode(op,
+                           _GetUniqueName(lowered_func->func_name),
+                           lowered_func->func_name);
   }
 
   std::vector<GraphNodeRef> VisitExpr_(const LetNode* op) override {
@@ -471,7 +438,8 @@ class GraphRuntimeCodegen
     return {};
   }
   std::vector<GraphNodeRef> VisitExpr_(const FunctionNode* op) override {
-    throw std::invalid_argument("function not supported");
+    CHECK(op->GetAttr<String>(attr::kCompiler).defined())
+        << "Only functions supported by custom codegen";
     return {};
   }
   std::vector<GraphNodeRef> VisitExpr_(const RefCreateNode* op) override {
@@ -568,13 +536,13 @@ class GraphRuntimeCodegen
 
  protected:
   /*! \brief nodes */
-  std::vector<GraphNodePtr> nodes_;
+  std::vector<GraphObjectPtr> nodes_;
   /*! \brief output of graph */
   std::vector<GraphNodeRef> heads_;
   /*! \brief mod */
   runtime::Module* mod_;
   /*! \brief variable map */
-  std::unordered_map<const Node*, std::vector<GraphNodeRef>> var_map_;
+  std::unordered_map<const Object*, std::vector<GraphNodeRef>> var_map_;
   /*! \brief target device */
   TargetsMap targets_;
   /*! \brief params */
@@ -582,8 +550,7 @@ class GraphRuntimeCodegen
   /*! \brief plan memory of device result */
   Map<Expr, Array<IntegerArray>> storage_device_map_;
   /*! \brief lowered funcs */
-  std::unordered_map<std::string, std::unordered_set<LoweredFunc, NodeHash, NodeEqual>>
-      lowered_funcs_;
+  std::unordered_map<std::string, IRModule> lowered_funcs_;
   /*! \brief name map */
   std::unordered_map<std::string, size_t> name_map_;
   /*! \brief compile engine */
@@ -594,7 +561,7 @@ class GraphRuntimeCodegenModule : public runtime::ModuleNode {
  public:
   GraphRuntimeCodegenModule() {}
   virtual PackedFunc GetFunction(const std::string& name,
-                                 const std::shared_ptr<ModuleNode>& sptr_to_self) {
+                                 const ObjectPtr<Object>& sptr_to_self) {
      if (name == "init") {
        return PackedFunc([sptr_to_self, this](TVMArgs args, TVMRetValue* rv) {
          CHECK_EQ(args.num_args, 2)
@@ -604,7 +571,7 @@ class GraphRuntimeCodegenModule : public runtime::ModuleNode {
          Map<Integer, tvm::Target> tmp = args[1];
          TargetsMap targets;
          for (const auto& it : tmp) {
-           auto dev_type = it.first.as<ir::IntImm>();
+           auto dev_type = it.first.as<tir::IntImmNode>();
            CHECK(dev_type);
            targets[dev_type->value] = it.second;
          }
@@ -622,23 +589,25 @@ class GraphRuntimeCodegenModule : public runtime::ModuleNode {
       });
     } else if (name == "list_params_name") {
       return PackedFunc([sptr_to_self, this](TVMArgs args, TVMRetValue* rv) {
-        Array<tvm::Expr> ret;
+        Array<runtime::String> ret;
         for (const auto &kv : this->output_.params) {
-          tvm::Expr name = ir::StringImm::make(kv.first);
-          ret.push_back(name);
+          ret.push_back(kv.first);
         }
         *rv = ret;
       });
-
     } else if (name == "get_param_by_name") {
       return PackedFunc([sptr_to_self, this](TVMArgs args, TVMRetValue* rv) {
         std::string key = args[0];
         CHECK_GT(this->output_.params.count(key), 0);
         *rv = this->output_.params[key];
       });
-    } else if (name == "get_lowered_funcs") {
+    } else if (name == "get_irmodule") {
       return PackedFunc([sptr_to_self, this](TVMArgs args, TVMRetValue* rv) {
         *rv = this->output_.lowered_funcs;
+      });
+    } else if (name == "get_external_modules") {
+      return PackedFunc([sptr_to_self, this](TVMArgs args, TVMRetValue* rv) {
+        *rv = this->output_.external_mods;
       });
     } else {
       return PackedFunc([](TVMArgs args, TVMRetValue* rv) {});
@@ -655,8 +624,7 @@ class GraphRuntimeCodegenModule : public runtime::ModuleNode {
 };
 
 runtime::Module CreateGraphCodegenMod() {
-  std::shared_ptr<GraphRuntimeCodegenModule> ptr =
-    std::make_shared<GraphRuntimeCodegenModule>();
+  auto ptr = make_object<GraphRuntimeCodegenModule>();
   return runtime::Module(ptr);
 }
 

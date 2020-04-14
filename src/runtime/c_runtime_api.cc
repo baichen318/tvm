@@ -6,9 +6,9 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
+ *
  *   http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing,
  * software distributed under the License is distributed on an
  * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -18,7 +18,6 @@
  */
 
 /*!
- *  Copyright (c) 2016 by Contributors
  * \file c_runtime_api.cc
  * \brief Device specific implementations
  */
@@ -29,37 +28,33 @@
 #include <tvm/runtime/module.h>
 #include <tvm/runtime/registry.h>
 #include <tvm/runtime/device_api.h>
-#ifdef _LIBCPP_SGX_CONFIG
-#include "sgx/trusted/runtime.h"
-#endif
-#ifndef _LIBCPP_SGX_NO_IOSTREAMS
 #include <sstream>
-#endif
 #include <array>
 #include <algorithm>
 #include <string>
 #include <cstdlib>
 #include <cctype>
 #include "runtime_base.h"
+#include "object_internal.h"
 
 namespace tvm {
 namespace runtime {
 
 std::string GetCustomTypeName(uint8_t type_code) {
-  auto f = tvm::runtime::Registry::Get("_datatype_get_type_name");
-  CHECK(f) << "Function _datatype_get_type_name not found";
+  auto f = tvm::runtime::Registry::Get("runtime._datatype_get_type_name");
+  CHECK(f) << "Function runtime._datatype_get_type_name not found";
   return (*f)(type_code).operator std::string();
 }
 
 uint8_t GetCustomTypeCode(const std::string& type_name) {
-  auto f = tvm::runtime::Registry::Get("_datatype_get_type_code");
-  CHECK(f) << "Function _datatype_get_type_code not found";
+  auto f = tvm::runtime::Registry::Get("runtime._datatype_get_type_code");
+  CHECK(f) << "Function runtime._datatype_get_type_code not found";
   return (*f)(type_name).operator int();
 }
 
 bool GetCustomTypeRegistered(uint8_t type_code) {
-  auto f = tvm::runtime::Registry::Get("_datatype_get_type_registered");
-  CHECK(f) << "Function _datatype_get_type_registered not found";
+  auto f = tvm::runtime::Registry::Get("runtime._datatype_get_type_registered");
+  CHECK(f) << "Function runtime._datatype_get_type_registered not found";
   return (*f)(type_code).operator bool();
 }
 
@@ -151,7 +146,7 @@ DeviceAPI* DeviceAPI::Get(TVMContext ctx, bool allow_missing) {
 
 void* DeviceAPI::AllocWorkspace(TVMContext ctx,
                                 size_t size,
-                                TVMType type_hint) {
+                                DLDataType type_hint) {
   return AllocDataSpace(ctx, size, kTempAllocaAlignment, type_hint);
 }
 
@@ -174,7 +169,6 @@ void DeviceAPI::SyncStreamFromTo(TVMContext ctx,
   LOG(FATAL) << "Device does not support stream api.";
 }
 
-#ifndef _LIBCPP_SGX_NO_IOSTREAMS
 //--------------------------------------------------------
 // Error handling mechanism
 // -------------------------------------------------------
@@ -235,7 +229,14 @@ std::string NormalizeError(std::string err_msg) {
     if (!(is >> line)) return false;
     // get filename
     while (is.peek() == ' ') is.get();
+#ifdef _MSC_VER  // handle volume separator ":" in Windows path
+    std::string drive;
+    if (!getline(is, drive, ':')) return false;
     if (!getline(is, file_name, ':')) return false;
+    file_name = drive + ":" + file_name;
+#else
+    if (!getline(is, file_name, ':')) return false;
+#endif
     // get line number
     if (!(is >> line_number)) return false;
     // get rest of the message.
@@ -331,11 +332,6 @@ std::string NormalizeError(std::string err_msg) {
   return os.str();
 }
 
-#else
-std::string NormalizeError(std::string err_msg) {
-  return err_msg;
-}
-#endif
 }  // namespace runtime
 }  // namespace tvm
 
@@ -359,27 +355,27 @@ int TVMAPIHandleException(const std::runtime_error &e) {
 }
 
 void TVMAPISetLastError(const char* msg) {
-#ifndef _LIBCPP_SGX_CONFIG
   TVMAPIRuntimeStore::Get()->last_error = msg;
-#else
-  sgx::OCallPackedFunc("__sgx_set_last_error__", msg);
-#endif
 }
 
 int TVMModLoadFromFile(const char* file_name,
                        const char* format,
                        TVMModuleHandle* out) {
   API_BEGIN();
-  Module m = Module::LoadFromFile(file_name, format);
-  *out = new Module(m);
+  TVMRetValue ret;
+  ret = Module::LoadFromFile(file_name, format);
+  TVMValue val;
+  int type_code;
+  ret.MoveToCHost(&val, &type_code);
+  *out = val.v_handle;
   API_END();
 }
 
 int TVMModImport(TVMModuleHandle mod,
                  TVMModuleHandle dep) {
   API_BEGIN();
-  static_cast<Module*>(mod)->Import(
-      *static_cast<Module*>(dep));
+  ObjectInternal::GetModuleNode(mod)->Import(
+      GetRef<Module>(ObjectInternal::GetModuleNode(dep)));
   API_END();
 }
 
@@ -388,7 +384,7 @@ int TVMModGetFunction(TVMModuleHandle mod,
                       int query_imports,
                       TVMFunctionHandle *func) {
   API_BEGIN();
-  PackedFunc pf = static_cast<Module*>(mod)->GetFunction(
+  PackedFunc pf = ObjectInternal::GetModuleNode(mod)->GetFunction(
       func_name, query_imports != 0);
   if (pf != nullptr) {
     *func = new PackedFunc(pf);
@@ -399,9 +395,7 @@ int TVMModGetFunction(TVMModuleHandle mod,
 }
 
 int TVMModFree(TVMModuleHandle mod) {
-  API_BEGIN();
-  delete static_cast<Module*>(mod);
-  API_END();
+  return TVMObjectFree(mod);
 }
 
 int TVMBackendGetFuncFromEnv(void* mod_node,
@@ -422,7 +416,7 @@ void* TVMBackendAllocWorkspace(int device_type,
   ctx.device_type = static_cast<DLDeviceType>(device_type);
   ctx.device_id = device_id;
 
-  TVMType type_hint;
+  DLDataType type_hint;
   type_hint.code = static_cast<decltype(type_hint.code)>(dtype_code_hint);
   type_hint.bits = static_cast<decltype(type_hint.bits)>(dtype_bits_hint);
   type_hint.lanes = 1;
@@ -470,22 +464,22 @@ int TVMFuncCall(TVMFunctionHandle func,
   (*static_cast<const PackedFunc*>(func)).CallPacked(
       TVMArgs(args, arg_type_codes, num_args), &rv);
   // handle return string.
-  if (rv.type_code() == kStr ||
-     rv.type_code() == kTVMType ||
-      rv.type_code() == kBytes) {
+  if (rv.type_code() == kTVMStr ||
+      rv.type_code() == kTVMDataType ||
+      rv.type_code() == kTVMBytes) {
     TVMRuntimeEntry* e = TVMAPIRuntimeStore::Get();
-    if (rv.type_code() != kTVMType) {
+    if (rv.type_code() != kTVMDataType) {
       e->ret_str = *rv.ptr<std::string>();
     } else {
       e->ret_str = rv.operator std::string();
     }
-    if (rv.type_code() == kBytes) {
+    if (rv.type_code() == kTVMBytes) {
       e->ret_bytes.data = e->ret_str.c_str();
       e->ret_bytes.size = e->ret_str.length();
-      *ret_type_code = kBytes;
+      *ret_type_code = kTVMBytes;
       ret_val->v_handle = &(e->ret_bytes);
     } else {
-      *ret_type_code = kStr;
+      *ret_type_code = kTVMStr;
       ret_val->v_str = e->ret_str.c_str();
     }
   } else {
@@ -583,13 +577,11 @@ int TVMStreamStreamSynchronize(int device_type,
   API_END();
 }
 
-int TVMCbArgToReturn(TVMValue* value, int code) {
+int TVMCbArgToReturn(TVMValue* value, int* code) {
   API_BEGIN();
   tvm::runtime::TVMRetValue rv;
-  rv = tvm::runtime::TVMArgValue(*value, code);
-  int tcode;
-  rv.MoveToCHost(value, &tcode);
-  CHECK_EQ(tcode, code);
+  rv = tvm::runtime::TVMMovableArgValue_(*value, *code);
+  rv.MoveToCHost(value, code);
   API_END();
 }
 
@@ -603,7 +595,7 @@ TVM_REGISTER_GLOBAL(tvm::runtime::symbol::tvm_set_device)
   });
 
 // set device api
-TVM_REGISTER_GLOBAL("_GetDeviceAttr")
+TVM_REGISTER_GLOBAL("runtime.GetDeviceAttr")
 .set_body([](TVMArgs args, TVMRetValue *ret) {
     TVMContext ctx;
     ctx.device_type = static_cast<DLDeviceType>(args[0].operator int());
@@ -621,3 +613,7 @@ TVM_REGISTER_GLOBAL("_GetDeviceAttr")
       DeviceAPIManager::Get(ctx)->GetAttr(ctx, kind, ret);
     }
   });
+
+
+TVM_REGISTER_GLOBAL("runtime.TVMSetStream")
+.set_body_typed(TVMSetStream);

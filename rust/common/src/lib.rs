@@ -20,8 +20,6 @@
 //! This crate contains the refactored basic components required
 //! for `runtime` and `frontend` TVM crates.
 
-#![feature(box_syntax, type_alias_enum_variants, trait_alias)]
-
 #[macro_use]
 extern crate failure;
 
@@ -44,5 +42,5 @@ pub mod packed_func;
 pub mod value;
 
 pub use errors::*;
-pub use ffi::{TVMByteArray, TVMContext, TVMType};
+pub use ffi::{DLDataType as TVMType, TVMByteArray, TVMContext};
 pub use packed_func::{TVMArgValue, TVMRetValue};

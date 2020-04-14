@@ -14,23 +14,28 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-# pylint: disable=invalid-name, import-self, unused-argument, unused-variable, inconsistent-return-statements
+# pylint: disable=invalid-name, import-self, unused-argument, unused-variable
+# pylint: disable=inconsistent-return-statements, import-outside-toplevel
 """CoreML frontend."""
-from __future__ import absolute_import as _abs
+import math
 import numpy as np
 import tvm
+from tvm.ir import IRModule
+
 from .. import analysis
 from .. import expr as _expr
-from .. import module as _module
+from .. import function as _function
 from .. import op as _op
 from ... import nd as _nd
 from ..._ffi import base as _base
 from .common import ExprTable
+from .common import infer_shape as _infer_shape
 
 __all__ = ['from_coreml']
 
 
 def _NeuralNetworkImageScaler(op, inexpr, etab):
+    # TODO: we need to support more colorspace, such as rgb.
     # this changes the symbol
     biases = np.array([op.blueBias, op.greenBias, op.redBias]).reshape([3, 1, 1])
     bias = etab.new_const(biases)
@@ -47,11 +52,16 @@ def _NeuralNetworkMeanImage(op, inexpr, etab):
 
 def _ConvolutionLayerParams(op, inexpr, etab):
     """Convolution layer params."""
-    weights = etab.new_const(np.array(list(op.weights.floatValue)).reshape(
-        tuple([op.outputChannels, op.kernelChannels] + list(op.kernelSize))))
+    if op.isDeconvolution:
+        weights = etab.new_const(np.array(list(op.weights.floatValue)).reshape(
+            tuple([op.kernelChannels, op.outputChannels] + list(op.kernelSize))))
+    else:
+        weights = etab.new_const(np.array(list(op.weights.floatValue)).reshape(
+            tuple([op.outputChannels, op.kernelChannels] + list(op.kernelSize))))
     dilation = list(op.dilationFactor)
     if not dilation:
         dilation = [1, 1]
+    N, C, H, W = _infer_shape(inexpr)
     params = {'channels':op.outputChannels,
               'kernel_size':list(op.kernelSize),
               'strides':list(op.stride),
@@ -60,29 +70,31 @@ def _ConvolutionLayerParams(op, inexpr, etab):
 
     if op.WhichOneof('ConvolutionPaddingType') == 'valid':
         valid = op.valid
-        padding = [b.startEdgeSize for b in valid.paddingAmounts.borderAmounts]
-        padding2 = [b.endEdgeSize for b in valid.paddingAmounts.borderAmounts]
-        for i, j in zip(padding, padding2):
-            assert i == j, "Asymmetry padding not supported"
-        if padding:
-            params['padding'] = padding
+        if valid.paddingAmounts.borderAmounts:
+            assert len(valid.paddingAmounts.borderAmounts) == 2
+            pad_t = valid.paddingAmounts.borderAmounts[0].startEdgeSize
+            pad_l = valid.paddingAmounts.borderAmounts[1].startEdgeSize
+            pad_b = valid.paddingAmounts.borderAmounts[0].endEdgeSize
+            pad_r = valid.paddingAmounts.borderAmounts[1].endEdgeSize
+            if not all(v == 0 for v in (pad_t, pad_l, pad_b, pad_r)):
+                inexpr = _op.nn.pad(data=inexpr, pad_width=((0, 0),
+                                                            (0, 0),
+                                                            (pad_t, pad_b),
+                                                            (pad_l, pad_r)))
     elif op.WhichOneof('ConvolutionPaddingType') == 'same':
+        assert op.same.asymmetryMode == 0, "Only support BOTTOM_RIGHT_HEAVY mode, " \
+                                           "which is used by tf/caffe and so on"
         kernel = params['kernel_size']
-        pad_h = kernel[0] - 1
-        pad_w = kernel[1] - 1
-        pad_t = pad_h // 2
-        pad_l = pad_w // 2
-        pad_b = pad_h - pad_t
-        pad_r = pad_w - pad_l
-        assert pad_t == pad_r and pad_l == pad_b, "Asymmetry padding not supported"
-        params['padding'] = [pad_t, pad_l]
+        strides = params['strides']
+        pad_t, pad_b = get_pad_value(H, kernel[0], strides[0])
+        pad_l, pad_r = get_pad_value(W, kernel[1], strides[1])
+        inexpr = _op.nn.pad(data=inexpr, pad_width=((0, 0),
+                                                    (0, 0),
+                                                    (pad_t, pad_b),
+                                                    (pad_l, pad_r)))
+
     else:
         raise NotImplementedError("Valid/Same convolution padding implemented")
-
-    # consume padding layer
-    if etab.in_padding:
-        params['padding'] = [sum(x) for x in zip(params.get('padding', [0, 0]), etab.paddings)]
-        etab.clear_padding()
 
     if op.isDeconvolution:
         ret = _op.nn.conv2d_transpose(data=inexpr, weight=weights, **params)
@@ -101,14 +113,13 @@ def _BatchnormLayerParams(op, inexpr, etab):
     if op.instanceNormalization:
         raise tvm.error.OpNotImplemented(
             'Operator "instance normalization" is not supported in frontend CoreML.')
-    else:
-        params = {'gamma':etab.new_const(list(op.gamma.floatValue)),
-                  'beta':etab.new_const(list(op.beta.floatValue)),
-                  'moving_mean':etab.new_const(list(op.mean.floatValue)),
-                  'moving_var': etab.new_const(list(op.variance.floatValue)),
-                  'epsilon': op.epsilon}
-        result, moving_mean, moving_var = _op.nn.batch_norm(data=inexpr, **params)
-        return result
+    params = {'gamma':etab.new_const(list(op.gamma.floatValue)),
+              'beta':etab.new_const(list(op.beta.floatValue)),
+              'moving_mean':etab.new_const(list(op.mean.floatValue)),
+              'moving_var': etab.new_const(list(op.variance.floatValue)),
+              'epsilon': op.epsilon}
+    result, moving_mean, moving_var = _op.nn.batch_norm(data=inexpr, **params)
+    return result
 
 
 def _ActivationParams(op, inexpr, etab):
@@ -187,40 +198,36 @@ def _PoolingLayerParams(op, inexpr, etab):
         raise tvm.error.OpNotImplemented(
             'Only Max and Average Pooling are supported in frontend CoreML.')
 
+    params = {'pool_size':list(op.kernelSize),
+              'strides':list(op.stride)}
+
+    if op.WhichOneof('PoolingPaddingType') == 'valid':
+        valid = op.valid
+        if valid.paddingAmounts.borderAmounts:
+            assert len(valid.paddingAmounts.borderAmounts) == 2
+            pad_t = valid.paddingAmounts.borderAmounts[0].startEdgeSize
+            pad_l = valid.paddingAmounts.borderAmounts[1].startEdgeSize
+            pad_b = valid.paddingAmounts.borderAmounts[0].endEdgeSize
+            pad_r = valid.paddingAmounts.borderAmounts[1].endEdgeSize
+            if not all(v == 0 for v in (pad_t, pad_l, pad_b, pad_r)):
+                params['padding'] = [pad_t, pad_l, pad_b, pad_r]
+    elif op.WhichOneof('PoolingPaddingType') == 'includeLastPixel':
+        # I don't know if this is correct
+        valid = op.includeLastPixel
+        padding = list(valid.paddingAmounts)
+        params['padding'] = padding
+        params['ceil_mode'] = True
     else:
-        params = {'pool_size':list(op.kernelSize),
-                  'strides':list(op.stride)}
+        msg = 'PoolingPaddingType {} is not supported in operator Pooling.'
+        op_name = op.WhichOneof('PoolingPaddingType')
+        raise tvm.error.OpAttributeUnImplemented(msg.format(op_name))
 
-        if op.WhichOneof('PoolingPaddingType') == 'valid':
-            valid = op.valid
-            padding = [b.startEdgeSize for b in valid.paddingAmounts.borderAmounts]
-            padding2 = [b.endEdgeSize for b in valid.paddingAmounts.borderAmounts]
-            for i, j in zip(padding, padding2):
-                assert i == j
-            params['padding'] = padding
-        elif op.WhichOneof('PoolingPaddingType') == 'includeLastPixel':
-            # I don't know if this is correct
-            valid = op.includeLastPixel
-            padding = list(valid.paddingAmounts)
-            params['padding'] = padding
-            params['ceil_mode'] = True
-        else:
-            msg = 'PoolingPaddingType {} is not supported in operator Pooling.'
-            op_name = op.WhichOneof('PoolingPaddingType')
-            raise tvm.error.OpAttributeUnImplemented(msg.format(op_name))
-
-        # consume padding layer
-        if etab.in_padding:
-            params['padding'] = [sum(x) for x in zip(
-                params.get('padding', [0, 0]), etab.paddings)]
-            etab.clear_padding()
-
-        if op.type == 0:
-            return _op.nn.max_pool2d(inexpr, **params)
-        if op.type == 1:
-            return _op.nn.avg_pool2d(inexpr, **params)
-        raise tvm.error.OpNotImplemented(
-            'Only Max and Average Pooling are supported in CoreML.')
+    if op.type == 0:
+        return _op.nn.max_pool2d(inexpr, **params)
+    if op.type == 1:
+        return _op.nn.avg_pool2d(inexpr, **params)
+    raise tvm.error.OpNotImplemented(
+        'Only Max and Average Pooling are supported in CoreML.')
 
 
 def _SoftmaxLayerParams(op, inexpr, etab):
@@ -276,21 +283,22 @@ def _FlattenLayerParams(op, inexpr, etab):
 
 
 def _PaddingLayerParams(op, inexpr, etab):
-    """Hacking for padding layer params."""
+    """Padding layer params."""
     if op.WhichOneof('PaddingType') == 'constant':
         constant = op.constant
         if constant.value != 0:
             raise tvm.error.OpAttributeUnImplemented(
                 '{} is not supported in operator Padding.'.format(constant.value))
-        padding = [b.startEdgeSize for b in op.paddingAmounts.borderAmounts]
-        padding2 = [b.endEdgeSize for b in op.paddingAmounts.borderAmounts]
-        for i, j in zip(padding, padding2):
-            assert i == j
-        etab.set_padding(padding)
-    else:
-        raise tvm.error.OpNotImplemented(
-            'Non-constant padding is not supported in frontend CoreML.')
-    return inexpr
+        pad_t = op.paddingAmounts.borderAmounts[0].startEdgeSize
+        pad_l = op.paddingAmounts.borderAmounts[1].startEdgeSize
+        pad_b = op.paddingAmounts.borderAmounts[0].endEdgeSize
+        pad_r = op.paddingAmounts.borderAmounts[1].endEdgeSize
+        return _op.nn.pad(data=inexpr, pad_width=((0, 0),
+                                                  (0, 0),
+                                                  (pad_t, pad_b),
+                                                  (pad_l, pad_r)))
+    raise tvm.error.OpNotImplemented(
+        'Non-constant padding is not supported in frontend CoreML.')
 
 
 def _PermuteLayerParams(op, inexpr, etab):
@@ -302,8 +310,9 @@ def _UpsampleLayerParams(op, inexpr, etab):
     if op.scalingFactor[0] != op.scalingFactor[1]:
         raise tvm.error.OpAttributeUnimplemented(
             'Upsample height and width must be equal.')
-    interpolationMode = 'NEAREST_NEIGHBOR' if op.mode == 0 else 'BILINEAR'
-    return _op.nn.upsampling(inexpr, scale=op.scalingFactor[0], method=interpolationMode)
+    interpolationMode = 'nearest_neighbor' if op.mode == 0 else 'bilinear'
+    return _op.nn.upsampling(inexpr, scale_h=op.scalingFactor[0],
+                             scale_w=op.scalingFactor[1], method=interpolationMode)
 
 
 def _L2NormalizeLayerParams(op, inexpr, etab):
@@ -372,6 +381,32 @@ _convert_map = {
     'MinLayerParams': _MinLayerParams,
 }
 
+# SAME padding: https://www.tensorflow.org/api_guides/python/nn
+def get_pad_value(data, kernel, stride):
+    """Get the pad tuple of value for SAME padding
+
+    Parameters
+    ----------
+    data:
+        1D input data
+
+    kernel:
+        1D input kernel
+
+    stride:
+        1D input stride
+
+    Returns
+    -------
+        pad tuple of value
+    """
+
+    out = int(math.ceil(float(data) / float(stride)))
+    pad = max(0, (out - 1) * stride + kernel - data)
+    pad_before = pad // 2
+    pad_after = pad - pad_before
+    return pad_before, pad_after
+
 
 def coreml_op_to_relay(op, inname, outname, etab):
     """Convert coreml layer to a Relay expression and update the expression table.
@@ -399,9 +434,7 @@ def coreml_op_to_relay(op, inname, outname, etab):
         insym = [etab.get_expr(i) for i in inname]
     ret = _convert_map[classname](op, insym, etab)
     if outname:
-        etab.set_expr(outname, ret)
-    if classname != 'PaddingLayerParams':
-        assert not etab.in_padding, "Previous padding not consumed by conv/pool"
+        etab.set_expr(outname, ret, force_override=True)
 
 
 def from_coreml(model, shape=None):
@@ -417,10 +450,10 @@ def from_coreml(model, shape=None):
 
     Returns
     -------
-    mod : tvm.relay.Module
+    mod : tvm.IRModule
         The relay module for compilation.
 
-    params : dict of str to tvm.NDArray
+    params : dict of str to tvm.nd.NDArray
         The parameter dict to be used by Relay.
     """
     try:
@@ -442,10 +475,19 @@ def from_coreml(model, shape=None):
     for pp in cc.preprocessing:
         whichpp = pp.WhichOneof('preprocessor')
         ppmethod = getattr(pp, whichpp)
-        # the NeuralNetworkImageScalar doesn't seem to have a featureName?
         if whichpp == 'scaler':
+            # Be careful we maybe only preprocess one input when we have multi inputs
+            # which is stored in pp.featureName. See unit testing verify_image_scaler
+            # in test_forward.py for CoreML.
             for i in spec.description.input:
-                coreml_op_to_relay(ppmethod, i.name, i.name, etab)
+                # we have multi inputs
+                if len(spec.description.input) > 1:
+                    assert pp.featureName != ''
+                    if i.name == pp.featureName:
+                        coreml_op_to_relay(ppmethod, i.name, i.name, etab)
+                else:
+                    assert pp.featureName == ''
+                    coreml_op_to_relay(ppmethod, i.name, i.name, etab)
         else:
             coreml_op_to_relay(ppmethod, pp.featureName, pp.featureName, etab)
 
@@ -462,6 +504,6 @@ def from_coreml(model, shape=None):
                for o in spec.description.output]
     # for now return first output
     outexpr = outexpr[0]
-    func = _expr.Function(analysis.free_vars(outexpr), outexpr)
+    func = _function.Function(analysis.free_vars(outexpr), outexpr)
     params = {k:_nd.array(np.array(v, dtype=np.float32)) for k, v in etab.params.items()}
-    return _module.Module.from_expr(func), params
+    return IRModule.from_expr(func), params

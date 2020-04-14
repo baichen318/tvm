@@ -21,9 +21,11 @@ set -u
 
 export TVM_HOME="$(git rev-parse --show-toplevel)"
 
-export LD_LIBRARY_PATH="$TVM_HOME/lib:$TVM_HOME/build:$TVM_HOME/nnvm:${LD_LIBRARY_PATH:-}"
-export PYTHONPATH="$TVM_HOME/python":"$TVM_HOME/nnvm/python":"$TVM_HOME/topi/python"
+export LD_LIBRARY_PATH="$TVM_HOME/lib:$TVM_HOME/build:${LD_LIBRARY_PATH:-}"
+export PYTHONPATH="$TVM_HOME/python":"$TVM_HOME/topi/python"
 export RUST_DIR="$TVM_HOME/rust"
+export LLVM_CONFIG_PATH=`which llvm-config-8`
+echo "Using $LLVM_CONFIG_PATH"
 
 cd $RUST_DIR
 cargo fmt -- --check
@@ -52,8 +54,8 @@ cd tests/test_tvm_dso
 cargo run
 cd -
 
-# run NNVM graph test
-cd tests/test_nnvm
+# run nn graph test
+cd tests/test_nn
 cargo run
 cd -
 

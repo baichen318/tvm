@@ -19,13 +19,22 @@
 set -e
 set -u
 
-export PYTHONPATH=python:topi/python:apps/extension/python
+export PYTHONPATH=`pwd`/python:`pwd`/topi/python:`pwd`/apps/extension/python
 export LD_LIBRARY_PATH="build:${LD_LIBRARY_PATH:-}"
+export TVM_BIND_THREADS=0
+export TVM_NUM_THREADS=2
 
-rm -rf python/tvm/*.pyc python/tvm/*/*.pyc python/tvm/*/*/*.pyc
+# cleanup pycache
+find . -type f -path "*.pyc" | xargs rm -f
 
 # Test TVM
 make cython3
+
+# Test MISRA-C runtime
+cd apps/bundle_deploy
+rm -rf build
+# make test_dynamic test_static
+cd ../..
 
 # Test extern package
 cd apps/extension
@@ -33,13 +42,26 @@ rm -rf lib
 make
 cd ../..
 
-python3 -m nose -v apps/extension/tests
+TVM_FFI=cython python3 -m pytest -v apps/extension/tests
+TVM_FFI=ctypes python3 -m pytest -v apps/extension/tests
 
-TVM_FFI=ctypes python3 -m nose -v tests/python/integration
-TVM_FFI=ctypes python3 -m nose -v tests/python/contrib
+# Test dso plugin
+cd apps/dso_plugin_module
+rm -rf lib
+make
+cd ../..
+TVM_FFI=cython python3 -m pytest -v apps/dso_plugin_module
+TVM_FFI=ctypes python3 -m pytest -v apps/dso_plugin_module
 
-TVM_FFI=ctypes python3 -m nose -v tests/python/relay
+# Do not enable TensorFlow op
+# TVM_FFI=cython sh prepare_and_test_tfop_module.sh
+# TVM_FFI=ctypes sh prepare_and_test_tfop_module.sh
+
+TVM_FFI=ctypes python3 -m pytest -v tests/python/integration
+TVM_FFI=ctypes python3 -m pytest -v tests/python/contrib
+
+TVM_FFI=ctypes python3 -m pytest -v tests/python/relay
 
 # Do not enable OpenGL
-# TVM_FFI=cython python -m nose -v tests/webgl
-# TVM_FFI=ctypes python3 -m nose -v tests/webgl
+# TVM_FFI=cython python -m pytest -v tests/webgl
+# TVM_FFI=ctypes python3 -m pytest -v tests/webgl

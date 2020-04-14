@@ -16,27 +16,32 @@
 # under the License.
 """Minimum graph runtime that executes graph containing TVM PackedFunc."""
 import numpy as np
+import tvm._ffi
 
 from .._ffi.base import string_types
-from .._ffi.function import get_global_func
 from .._ffi.runtime_ctypes import TVMContext
 from ..rpc import base as rpc_base
 
+
 def create(graph_json_str, libmod, ctx):
     """Create a runtime executor module given a graph and module.
+
     Parameters
     ----------
     graph_json_str : str or graph class
-        The graph to be deployed in json format output by nnvm graph.
+        The graph to be deployed in json format output by json graph.
         The graph can only contain one operator(tvm_op) that
         points to the name of PackedFunc in the libmod.
-    libmod : tvm.Module
+
+    libmod : tvm.runtime.Module
         The module of the corresponding function
+
     ctx : TVMContext or list of TVMContext
         The context to deploy the module. It can be local or remote when there
         is only one TVMContext. Otherwise, the first context in the list will
         be used as this purpose. All context should be given for heterogeneous
         execution.
+
     Returns
     -------
     graph_module : GraphModule
@@ -51,20 +56,23 @@ def create(graph_json_str, libmod, ctx):
     ctx, num_rpc_ctx, device_type_id = get_device_ctx(libmod, ctx)
 
     if num_rpc_ctx == len(ctx):
-        hmod = rpc_base._ModuleHandle(libmod)
-        fcreate = ctx[0]._rpc_sess.get_function("tvm.graph_runtime.remote_create")
-        return GraphModule(fcreate(graph_json_str, hmod, *device_type_id))
+        fcreate = ctx[0]._rpc_sess.get_function("tvm.graph_runtime.create")
+    else:
+        fcreate = tvm._ffi.get_global_func("tvm.graph_runtime.create")
 
-    fcreate = get_global_func("tvm.graph_runtime.create")
     return GraphModule(fcreate(graph_json_str, libmod, *device_type_id))
+
 
 def get_device_ctx(libmod, ctx):
     """Parse and validate all the device context(s).
+
     Parameters
     ----------
-    libmod : tvm.Module
+    libmod : tvm.runtime.Module
         The module of the corresponding function
+
     ctx : TVMContext or list of TVMContext
+
     Returns
     -------
     ctx : list of TVMContext
@@ -112,13 +120,13 @@ class GraphModule(object):
 
     Parameters
     ----------
-    module : Module
-        The interal tvm module that holds the actual graph functions.
+    module : tvm.runtime.Module
+        The internal tvm module that holds the actual graph functions.
 
     Attributes
     ----------
-    module : Module
-        The interal tvm module that holds the actual graph functions.
+    module : tvm.runtime.Module
+        The internal tvm module that holds the actual graph functions.
     """
 
     def __init__(self, module):
@@ -143,7 +151,7 @@ class GraphModule(object):
            The input key
 
         params : dict of str to NDArray
-           Additonal arguments
+           Additional arguments
         """
         if key is not None:
             self._get_input(key).copyfrom(value)
@@ -200,7 +208,7 @@ class GraphModule(object):
         Parameters
         ----------
         index : int
-            The input index
+            The output index
 
         out : NDArray
             The output array container
@@ -212,7 +220,7 @@ class GraphModule(object):
         return self._get_output(index)
 
     def debug_get_output(self, node, out):
-        """Run graph upto node and get the output to out
+        """Run graph up to node and get the output to out
 
         Parameters
         ----------

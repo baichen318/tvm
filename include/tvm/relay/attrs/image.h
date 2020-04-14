@@ -24,7 +24,7 @@
 #ifndef TVM_RELAY_ATTRS_IMAGE_H_
 #define TVM_RELAY_ATTRS_IMAGE_H_
 
-#include <tvm/attrs.h>
+#include <tvm/ir/attrs.h>
 #include <tvm/relay/base.h>
 #include <string>
 
@@ -36,7 +36,8 @@ struct ResizeAttrs : public tvm::AttrsNode<ResizeAttrs> {
   Array<IndexExpr> size;
   std::string layout;
   std::string method;
-  bool align_corners;
+  std::string coordinate_transformation_mode;
+  DataType out_dtype;
 
   TVM_DECLARE_ATTRS(ResizeAttrs, "relay.attrs.ResizeAttrs") {
     TVM_ATTR_FIELD(size).set_default(NullValue<Array<IndexExpr> >())
@@ -46,12 +47,82 @@ struct ResizeAttrs : public tvm::AttrsNode<ResizeAttrs> {
                   "'N', 'C', 'H', 'W' stands for batch, channel, height, and width"
                   "dimensions respectively. Resize is applied on the 'H' and"
                   "'W' dimensions.");
-    TVM_ATTR_FIELD(method).set_default("BILINEAR")
+    TVM_ATTR_FIELD(method).set_default("bilinear")
         .describe("Specify the mode to use for scaling."
-                  "NEAREST_NEIGHBOR -  Nearest Neighbor"
-                  "BILINEAR - Bilinear Interpolation");
-    TVM_ATTR_FIELD(align_corners).set_default(false)
-        .describe("Should be true to preserve the values at the corner pixels");
+                  "nearest_neighbor -  Nearest Neighbor"
+                  "bilinear - Bilinear Interpolation"
+                  "bicubic - Bicubic Interpolation");
+    TVM_ATTR_FIELD(coordinate_transformation_mode).set_default("half_pixel")
+        .describe("Describes how to transform the coordinate in the resized tensor"
+                  "to the coordinate in the original tensor."
+                  "Refer to the ONNX Resize operator specification for details"
+                  "Available options are half_pixel, align_corners and asymmetric");
+    TVM_ATTR_FIELD(out_dtype)
+        .set_default(NullValue<DataType>())
+        .describe("Output data type.");
+  }
+};
+
+/*! \brief Attributes used in image crop_and_resize operator */
+struct CropAndResizeAttrs : public tvm::AttrsNode<CropAndResizeAttrs> {
+  Array<IndexExpr> crop_size;
+  std::string layout;
+  std::string method;
+  double extrapolation_value;
+  DataType out_dtype;
+
+  TVM_DECLARE_ATTRS(CropAndResizeAttrs, "relay.attrs.CropAndResizeAttrs") {
+    TVM_ATTR_FIELD(crop_size).set_default(NullValue<Array<IndexExpr> >())
+        .describe("Target Size.");
+    TVM_ATTR_FIELD(layout).set_default("NCHW")
+        .describe("Dimension ordering of input data. Can be 'NCHW', 'NHWC', etc."
+                  "'N', 'C', 'H', 'W' stands for batch, channel, height, and width"
+                  "dimensions respectively. Resize is applied on the 'H' and"
+                  "'W' dimensions.");
+    TVM_ATTR_FIELD(method).set_default("bilinear")
+        .describe("Specify the mode to use for scaling."
+                  "nearest_neighbor -  Nearest Neighbor"
+                  "bilinear - Bilinear Interpolation");
+    TVM_ATTR_FIELD(extrapolation_value).set_default(0.0)
+        .describe("Specify value for extrapolation.");
+    TVM_ATTR_FIELD(out_dtype)
+        .set_default(NullValue<DataType>())
+        .describe("Output data type.");
+  }
+};
+
+/*! \brief Attributes used in dilation operators */
+struct Dilation2DAttrs : public tvm::AttrsNode<Dilation2DAttrs> {
+  Array<IndexExpr> strides;
+  Array<IndexExpr> padding;
+  Array<IndexExpr> dilations;
+  std::string data_layout;
+  std::string kernel_layout;
+  DataType out_dtype;
+
+  TVM_DECLARE_ATTRS(Dilation2DAttrs, "relay.attrs.Dilation2DAttrs") {
+    TVM_ATTR_FIELD(strides).set_default(Array<IndexExpr>({1, 1}))
+        .describe("Specifies the strides of the sliding window. [stride_height, stride_width].");
+    TVM_ATTR_FIELD(padding).set_default(Array<IndexExpr>({0, 0}))
+        .describe("If padding is non-zero, then the input is implicitly zero-padded"
+                  "Padding support both symmetric and asymmetric as"
+                  "one int : same padding used on all sides"
+                  "two int : bottom, right will use same padding as top, left"
+                  "four int : padding width in the order of (top, left, bottom, right)");
+    TVM_ATTR_FIELD(dilations).set_default(Array<IndexExpr>({1, 1}))
+        .describe("Specifies the dilation rate to use. [dilation_height, dilation_width]");
+    TVM_ATTR_FIELD(data_layout).set_default("NCHW")
+        .describe("Dimension ordering of input data. Can be 'NCHW', 'NHWC', etc."
+                  "'N', 'C', 'H', 'W' stands for batch, channel, height, and width"
+                  "dimensions respectively. Convolution is applied on the 'H' and"
+                  "'W' dimensions.");
+    TVM_ATTR_FIELD(kernel_layout).set_default("IHW")
+        .describe("Dimension ordering of weight. Can be 'IHW', 'HWI', etc."
+                  "'I', 'H', 'W' stands for input_channel, height, and width"
+                  "dimensions respectively.");
+    TVM_ATTR_FIELD(out_dtype)
+        .set_default(NullValue<DataType>())
+        .describe("Output data type, set to explicit type under mixed precision setting");
   }
 };
 

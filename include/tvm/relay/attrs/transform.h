@@ -24,8 +24,9 @@
 #ifndef TVM_RELAY_ATTRS_TRANSFORM_H_
 #define TVM_RELAY_ATTRS_TRANSFORM_H_
 
-#include <tvm/attrs.h>
+#include <tvm/ir/attrs.h>
 #include <tvm/relay/base.h>
+#include <tvm/relay/expr.h>
 #include <string>
 
 namespace tvm {
@@ -196,7 +197,7 @@ struct SqueezeAttrs : public tvm::AttrsNode<SqueezeAttrs> {
 };  // struct SqueezeAttrs
 
 struct SplitAttrs : public tvm::AttrsNode<SplitAttrs> {
-  NodeRef indices_or_sections;
+  ObjectRef indices_or_sections;
   int axis;
 
   TVM_DECLARE_ATTRS(SplitAttrs, "relay.attrs.SplitAttrs") {
@@ -297,6 +298,22 @@ struct NdarraySizeAttrs : public tvm::AttrsNode<NdarraySizeAttrs> {
         .set_default(NullValue<DataType>());
   }
 };
+
+/*! \brief Attributes used in one-hot operator */
+struct OneHotAttrs : public tvm::AttrsNode<OneHotAttrs> {
+  int depth;
+  int axis;
+  DataType dtype;
+
+  TVM_DECLARE_ATTRS(OneHotAttrs, "relay.attrs.OneHotAttrs") {
+    TVM_ATTR_FIELD(depth).set_default(1)
+        .describe("Depth of the one hot dimension.");
+    TVM_ATTR_FIELD(axis).set_default(-1)
+        .describe("Axis to fill.");
+    TVM_ATTR_FIELD(dtype).set_default(NullValue<DataType>())
+        .describe("Output data type.");
+  }
+};  // struct OneHotAttrs
 
 }  // namespace relay
 }  // namespace tvm

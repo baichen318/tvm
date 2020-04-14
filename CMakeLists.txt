@@ -7,6 +7,7 @@ include(cmake/util/FindCUDA.cmake)
 include(cmake/util/FindVulkan.cmake)
 include(cmake/util/FindLLVM.cmake)
 include(cmake/util/FindROCM.cmake)
+include(cmake/util/FindANTLR.cmake)
 
 if(EXISTS ${CMAKE_CURRENT_BINARY_DIR}/config.cmake)
   include(${CMAKE_CURRENT_BINARY_DIR}/config.cmake)
@@ -27,37 +28,46 @@ tvm_option(USE_OPENGL "Build with OpenGL" OFF)
 tvm_option(USE_METAL "Build with Metal" OFF)
 tvm_option(USE_ROCM "Build with ROCM" OFF)
 tvm_option(ROCM_PATH "The path to rocm" /opt/rocm)
+tvm_option(USE_HEXAGON_DEVICE "Build with Hexagon device support in TVM runtime" OFF)
+tvm_option(USE_HEXAGON_SDK "Path to the Hexagon SDK root (required for Hexagon support in TVM runtime or for building TVM runtime for Hexagon)" /path/to/sdk)
 tvm_option(USE_RPC "Build with RPC" ON)
 tvm_option(USE_THREADS "Build with thread support" ON)
 tvm_option(USE_LLVM "Build with LLVM, can be set to specific llvm-config path" OFF)
 tvm_option(USE_STACKVM_RUNTIME "Include stackvm into the runtime" OFF)
 tvm_option(USE_GRAPH_RUNTIME "Build with tiny graph runtime" ON)
 tvm_option(USE_GRAPH_RUNTIME_DEBUG "Build with tiny graph runtime debug mode" OFF)
+tvm_option(USE_OPENMP "Build with OpenMP thread pool implementation" OFF)
 tvm_option(USE_RELAY_DEBUG "Building Relay in debug mode..." OFF)
-tvm_option(USE_SGX "Build with SGX" OFF)
 tvm_option(USE_RTTI "Build with RTTI" ON)
 tvm_option(USE_MSVC_MT "Build with MT" OFF)
 tvm_option(USE_MICRO "Build with Micro" OFF)
 tvm_option(INSTALL_DEV "Install compiler infrastructure" OFF)
 tvm_option(HIDE_PRIVATE_SYMBOLS "Compile with -fvisibility=hidden." OFF)
+tvm_option(USE_TF_TVMDSOOP "Build with TensorFlow TVMDSOOp" OFF)
 
 # 3rdparty libraries
 tvm_option(DLPACK_PATH "Path to DLPACK" "3rdparty/dlpack/include")
 tvm_option(DMLC_PATH "Path to DMLC" "3rdparty/dmlc-core/include")
 tvm_option(RANG_PATH "Path to RANG" "3rdparty/rang/include")
 tvm_option(COMPILER_RT_PATH "Path to COMPILER-RT" "3rdparty/compiler-rt")
+tvm_option(PICOJSON_PATH "Path to PicoJSON" "3rdparty/picojson")
 
 # Contrib library options
 tvm_option(USE_BLAS "The blas library to be linked" none)
 tvm_option(USE_MKL_PATH "MKL root path when use MKL blas" none)
+tvm_option(USE_MKLDNN "Build with MKLDNN" OFF)
 tvm_option(USE_CUDNN "Build with cuDNN" OFF)
 tvm_option(USE_CUBLAS "Build with cuBLAS" OFF)
+tvm_option(USE_THRUST "Build with Thrust" OFF)
 tvm_option(USE_MIOPEN "Build with ROCM:MIOpen" OFF)
 tvm_option(USE_ROCBLAS "Build with ROCM:RoCBLAS" OFF)
 tvm_option(USE_SORT "Build with sort support" OFF)
 tvm_option(USE_NNPACK "Build with nnpack support" OFF)
 tvm_option(USE_RANDOM "Build with random support" OFF)
+tvm_option(USE_MICRO_STANDALONE_RUNTIME "Build with micro.standalone_runtime support" OFF)
 tvm_option(USE_ANTLR "Build with ANTLR for Relay parsing" OFF)
+tvm_option(USE_TFLITE "Build with tflite support" OFF)
+tvm_option(USE_TENSORFLOW_PATH "TensorFlow root path when use TFLite" none)
 
 # include directories
 include_directories(${CMAKE_INCLUDE_PATH})
@@ -66,10 +76,11 @@ include_directories(${DLPACK_PATH})
 include_directories(${DMLC_PATH})
 include_directories(${RANG_PATH})
 include_directories(${COMPILER_RT_PATH})
+include_directories(${PICOJSON_PATH})
 
 # initial variables
 set(TVM_LINKER_LIBS "")
-set(TVM_RUNTIME_LINKER_LIBS ${CMAKE_DL_LIBS})
+set(TVM_RUNTIME_LINKER_LIBS "")
 
 # Generic compilation options
 if(MSVC)
@@ -90,17 +101,17 @@ if(MSVC)
     endforeach(flag_var)
   endif()
 else(MSVC)
-  include(CheckCXXCompilerFlag)
-  check_cxx_compiler_flag("-std=c++11"    SUPPORT_CXX11)
   if ("${CMAKE_BUILD_TYPE}" STREQUAL "Debug")
     message("Build in Debug mode")
-    set(CMAKE_C_FLAGS "-O0 -g -Wall -fPIC ${CMAKE_C_FLAGS} -rdynamic")
-    set(CMAKE_CXX_FLAGS "-O0 -g -Wall -fPIC -std=c++11 ${CMAKE_CXX_FLAGS} -rdynamic")
+    set(CMAKE_C_FLAGS "-O0 -g -Wall -fPIC ${CMAKE_C_FLAGS}")
+    set(CMAKE_CXX_FLAGS "-O0 -g -Wall -fPIC ${CMAKE_CXX_FLAGS}")
+    set(CMAKE_CUDA_FLAGS "-O0 -g -Xcompiler=-Wall -Xcompiler=-fPIC ${CMAKE_CUDA_FLAGS}")
   else()
     set(CMAKE_C_FLAGS "-O2 -Wall -fPIC ${CMAKE_C_FLAGS}")
-    set(CMAKE_CXX_FLAGS "-O2 -Wall -fPIC -std=c++11 ${CMAKE_CXX_FLAGS}")
+    set(CMAKE_CXX_FLAGS "-O2 -Wall -fPIC ${CMAKE_CXX_FLAGS}")
+    set(CMAKE_CUDA_FLAGS "-O2 -Xcompiler=-Wall -Xcompiler=-fPIC ${CMAKE_CUDA_FLAGS}")
     if (HIDE_PRIVATE_SYMBOLS)
-      message("Hide private symbols...")
+      message(STATUS "Hide private symbols...")
       set(CMAKE_C_FLAGS "-fvisibility=hidden ${CMAKE_C_FLAGS}")
       set(CMAKE_CXX_FLAGS "-fvisibility=hidden ${CMAKE_CXX_FLAGS}")
     endif(HIDE_PRIVATE_SYMBOLS)
@@ -109,48 +120,100 @@ else(MSVC)
       CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 7.0)
     set(CMAKE_CXX_FLAGS "-faligned-new ${CMAKE_CXX_FLAGS}")
   endif()
+
+  # Detect if we're compiling for Hexagon.
+  set(TEST_FOR_HEXAGON_CXX
+      "#ifndef __hexagon__"
+      "#error"
+      "#endif"
+      "int main() {}"
+      # Define _start_main to avoid linking errors with -fPIC.
+      "extern \"C\" void _start_main() {}")
+  set(TEST_FOR_HEXAGON_DIR
+      "${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeTmp")
+  set(TEST_FOR_HEXAGON_FILE "${TEST_FOR_HEXAGON_DIR}/test_for_hexagon.cc")
+  string(REPLACE ";" "\n" TEST_FOR_HEXAGON_CXX_TEXT "${TEST_FOR_HEXAGON_CXX}")
+  file(WRITE "${TEST_FOR_HEXAGON_FILE}" "${TEST_FOR_HEXAGON_CXX_TEXT}")
+  try_compile(BUILD_FOR_HEXAGON "${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}"
+              "${TEST_FOR_HEXAGON_FILE}")
+  file(REMOVE "${TEST_FOR_HEXAGON_FILE}")
+  if(BUILD_FOR_HEXAGON)
+    message(STATUS "Building for Hexagon")
+  endif()
 endif(MSVC)
 
+# Hexagon has dlopen built into QuRT (no need for static library).
+if(NOT BUILD_FOR_HEXAGON)
+  string(APPEND TVM_RUNTIME_LINKER_LIBS ${CMAKE_DL_LIBS})
+endif()
+
 # add source group
-FILE(GLOB_RECURSE GROUP_SOURCE "src/*.cc" "nnvm/src/*.cc")
-FILE(GLOB_RECURSE GROUP_INCLUDE "src/*.h" "include/*.h"
-                                "nnvm/src/*.h" "nnvm/include/*.h")
+FILE(GLOB_RECURSE GROUP_SOURCE "src/*.cc")
+FILE(GLOB_RECURSE GROUP_INCLUDE "src/*.h" "include/*.h")
 assign_source_group("Source" ${GROUP_SOURCE})
 assign_source_group("Include" ${GROUP_INCLUDE})
 
 # Source file lists
-file(GLOB COMPILER_SRCS
-    src/api/*.cc
-    src/arithmetic/*.cc
-    src/autotvm/*.cc
-    src/codegen/*.cc
-    src/lang/*.cc
-    src/pass/*.cc
-    src/op/*.cc
+file(GLOB_RECURSE COMPILER_SRCS
     src/node/*.cc
-    src/schedule/*.cc
+    src/ir/*.cc
+    src/arith/*.cc
+    src/te/*.cc
+    src/autotvm/*.cc
+    src/tir/*.cc
+    src/driver/*.cc
+    src/printer/*.cc
+    src/support/*.cc
     )
 
-file(GLOB_RECURSE RELAY_SRCS
-    src/relay/*.cc
+file(GLOB CODEGEN_SRCS
+  src/target/*.cc
+  src/target/source/*.cc
     )
-list(APPEND COMPILER_SRCS ${RELAY_SRCS})
 
-file(GLOB DATATYPE_SRCS src/codegen/datatype/*.cc)
-list(APPEND COMPILER_SRCS ${DATATYPE_SRCS})
+list(APPEND COMPILER_SRCS ${CODEGEN_SRCS})
 
-if(NOT MSVC)
-  file(GLOB COMPILER_VERILOG_SRCS src/codegen/verilog/*.cc)
-  list(APPEND COMPILER_SRCS ${COMPILER_VERILOG_SRCS})
+file(GLOB_RECURSE RELAY_OP_SRCS
+    src/relay/op/*.cc
+    )
+file(GLOB_RECURSE RELAY_PASS_SRCS
+    src/relay/analysis/*.cc
+    src/relay/transforms/*.cc
+    src/relay/quantize/*.cc
+    )
+file(GLOB RELAY_BACKEND_SRCS
+    src/relay/backend/*.cc
+    src/relay/backend/vm/*.cc
+    )
+file(GLOB_RECURSE RELAY_IR_SRCS
+    src/relay/ir/*.cc
+    )
+file(GLOB_RECURSE RELAY_QNN_SRCS
+    src/relay/qnn/*.cc
+)
+list(APPEND COMPILER_SRCS ${RELAY_OP_SRCS})
+list(APPEND COMPILER_SRCS ${RELAY_PASS_SRCS})
+list(APPEND COMPILER_SRCS ${RELAY_BACKEND_SRCS})
+list(APPEND COMPILER_SRCS ${RELAY_IR_SRCS})
+list(APPEND COMPILER_SRCS ${RELAY_QNN_SRCS})
+
+
+if(USE_VM_PROFILER)
+  message(STATUS "Build compiler with Relay VM profiler support...")
+  file(GLOB BACKEND_VM_PROFILER_SRCS src/relay/backend/vm/profiler/*.cc)
+  list(APPEND COMPILER_SRCS ${BACKEND_VM_PROFILER_SRCS})
+endif(USE_VM_PROFILER)
+
+if(BUILD_FOR_HEXAGON)
+  # Add file implementing posix_memalign.
+  list(APPEND RUNTIME_SRCS src/runtime/hexagon/hexagon_posix.cc)
+
+  add_definitions(-D_MACH_I32=int)
 endif()
 
-file(GLOB_RECURSE NNVM_COMPILER_SRCS
-    nnvm/src/c_api/*.cc
-    nnvm/src/core/*.cc
-    nnvm/src/pass/*.cc
-    nnvm/src/compiler/*.cc
-    nnvm/src/top/*.cc
-    )
+file(GLOB DATATYPE_SRCS src/target/datatype/*.cc)
+list(APPEND COMPILER_SRCS ${DATATYPE_SRCS})
+
 
 file(GLOB TOPI_SRCS
     topi/src/*.cc
@@ -175,7 +238,7 @@ if(USE_RPC)
 endif(USE_RPC)
 
 file(GLOB STACKVM_RUNTIME_SRCS src/runtime/stackvm/*.cc)
-file(GLOB STACKVM_CODEGEN_SRCS src/codegen/stackvm/*.cc)
+file(GLOB STACKVM_CODEGEN_SRCS src/target/stackvm/*.cc)
 list(APPEND COMPILER_SRCS ${STACKVM_CODEGEN_SRCS})
 if(USE_STACKVM_RUNTIME)
   message(STATUS "Build with stackvm support in runtime...")
@@ -198,43 +261,76 @@ if(USE_GRAPH_RUNTIME)
   endif(USE_GRAPH_RUNTIME_DEBUG)
 endif(USE_GRAPH_RUNTIME)
 
+if(USE_VM_PROFILER)
+  message(STATUS "Build with Relay VM profiler support...")
+  file(GLOB RUNTIME_VM_PROFILER_SRCS src/runtime/vm/profiler/*.cc)
+  list(APPEND RUNTIME_SRCS ${RUNTIME_VM_PROFILER_SRCS})
+endif(USE_VM_PROFILER)
+
+if(USE_EXAMPLE_EXT_RUNTIME)
+  message(STATUS "Build with example external runtime...")
+  file(GLOB RUNTIME_EXAMPLE_EXTERNAL_SRCS src/runtime/contrib/example_ext_runtime/*.cc)
+  list(APPEND RUNTIME_SRCS ${RUNTIME_EXAMPLE_EXTERNAL_SRCS})
+endif(USE_EXAMPLE_EXT_RUNTIME)
+
 # Module rules
 include(cmake/modules/VTA.cmake)
 include(cmake/modules/CUDA.cmake)
+include(cmake/modules/Hexagon.cmake)
 include(cmake/modules/OpenCL.cmake)
 include(cmake/modules/OpenGL.cmake)
+include(cmake/modules/OpenMP.cmake)
 include(cmake/modules/Vulkan.cmake)
 include(cmake/modules/Metal.cmake)
 include(cmake/modules/ROCM.cmake)
-include(cmake/modules/SGX.cmake)
 include(cmake/modules/LLVM.cmake)
 include(cmake/modules/Micro.cmake)
 include(cmake/modules/ANTLR.cmake)
 include(cmake/modules/contrib/BLAS.cmake)
+include(cmake/modules/contrib/CODEGENC.cmake)
+include(cmake/modules/contrib/DNNL.cmake)
 include(cmake/modules/contrib/Random.cmake)
+include(cmake/modules/contrib/MicroStandaloneRuntime.cmake)
 include(cmake/modules/contrib/Sort.cmake)
 include(cmake/modules/contrib/NNPack.cmake)
 include(cmake/modules/contrib/HybridDump.cmake)
+include(cmake/modules/contrib/TFLite.cmake)
+include(cmake/modules/contrib/TF_TVMDSOOP.cmake)
+
+if(NOT MSVC)
+  include(CheckCXXCompilerFlag)
+  check_cxx_compiler_flag("-std=c++14" SUPPORT_CXX14)
+  message(STATUS "Build with c++14")
+  set(CMAKE_CXX_FLAGS "-std=c++14 ${CMAKE_CXX_FLAGS}")
+  set(CMAKE_CUDA_STANDARD 14)
+endif()
 
 add_library(tvm SHARED ${COMPILER_SRCS} ${RUNTIME_SRCS})
 add_library(tvm_topi SHARED ${TOPI_SRCS})
 add_library(tvm_runtime SHARED ${RUNTIME_SRCS})
 
+
 if(USE_RELAY_DEBUG)
   message(STATUS "Building Relay in debug mode...")
   set_target_properties(tvm PROPERTIES COMPILE_DEFINITIONS "USE_RELAY_DEBUG")
+  set_target_properties(tvm PROPERTIES COMPILE_DEFINITIONS "DMLC_LOG_DEBUG")
 else()
   set_target_properties(tvm PROPERTIES COMPILE_DEFINITIONS "NDEBUG")
 endif(USE_RELAY_DEBUG)
 
-if(NOT USE_SGX STREQUAL "OFF")
-  add_dependencies(tvm sgx_edl)
-  add_dependencies(tvm_runtime sgx_edl tvm_t)
-  install(TARGETS tvm_t ARCHIVE DESTINATION lib${LIB_SUFFIX})
-endif()
-add_library(nnvm_compiler SHARED ${NNVM_COMPILER_SRCS})
+if(BUILD_FOR_HEXAGON)
+  # Wrap pthread_create to allow setting custom stack size.
+  set_target_properties(tvm_runtime PROPERTIES LINK_FLAGS
+                        "-Wl,--wrap=pthread_create")
 
-if(USE_THREADS)
+  target_include_directories(tvm_runtime
+    PUBLIC "${USE_HEXAGON_SDK}/libs/common/qurt/ADSPv62MP/include/posix"
+    PUBLIC "${USE_HEXAGON_SDK}/libs/common/qurt/ADSPv62MP/include/qurt"
+    PUBLIC "${USE_HEXAGON_SDK}/incs"
+    PUBLIC "${USE_HEXAGON_SDK}/incs/stddef")
+endif()
+
+if(USE_THREADS AND NOT BUILD_FOR_HEXAGON)
   message(STATUS "Build with thread support...")
   set(CMAKE_THREAD_PREFER_PTHREAD TRUE)
   set(THREADS_PREFER_PTHREAD_FLAG TRUE)
@@ -242,13 +338,21 @@ if(USE_THREADS)
   target_link_libraries(tvm Threads::Threads)
   target_link_libraries(tvm_topi Threads::Threads)
   target_link_libraries(tvm_runtime Threads::Threads)
-  target_link_libraries(nnvm_compiler Threads::Threads)
-endif(USE_THREADS)
+endif()
 
 target_link_libraries(tvm ${TVM_LINKER_LIBS} ${TVM_RUNTIME_LINKER_LIBS})
 target_link_libraries(tvm_topi tvm ${TVM_LINKER_LIBS} ${TVM_RUNTIME_LINKER_LIBS})
 target_link_libraries(tvm_runtime ${TVM_RUNTIME_LINKER_LIBS})
-target_link_libraries(nnvm_compiler tvm)
+
+if (HIDE_PRIVATE_SYMBOLS AND NOT ${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
+  set(HIDE_SYMBOLS_LINKER_FLAGS "-Wl,--exclude-libs,ALL")
+  # Note: 'target_link_options' with 'PRIVATE' keyword would be cleaner
+  # but it's not available until CMake 3.13. Switch to 'target_link_options'
+  # once minimum CMake version is bumped up to 3.13 or above.
+  target_link_libraries(tvm ${HIDE_SYMBOLS_LINKER_FLAGS})
+  target_link_libraries(tvm_topi ${HIDE_SYMBOLS_LINKER_FLAGS})
+  target_link_libraries(tvm_runtime ${HIDE_SYMBOLS_LINKER_FLAGS})
+endif()
 
 # Related headers
 target_include_directories(
@@ -257,10 +361,7 @@ target_include_directories(
 target_include_directories(
   tvm_topi
   PUBLIC "topi/include")
-target_include_directories(
-  nnvm_compiler
-  PUBLIC "nnvm/include"
-  PUBLIC "topi/include")
+
 
 # Tests
 set(TEST_EXECS "")
@@ -299,7 +400,6 @@ add_custom_target(runtime DEPENDS tvm_runtime)
 install(TARGETS tvm DESTINATION lib${LIB_SUFFIX})
 install(TARGETS tvm_topi DESTINATION lib${LIB_SUFFIX})
 install(TARGETS tvm_runtime DESTINATION lib${LIB_SUFFIX})
-install(TARGETS nnvm_compiler DESTINATION lib${LIB_SUFFIX})
 
 if (INSTALL_DEV)
   install(
@@ -318,7 +418,7 @@ if (INSTALL_DEV)
     PATTERN "*.h"
     )
   install(
-    DIRECTORY "nnvm/include/." DESTINATION "include"
+    DIRECTORY "3rdparty/dmlc-core/include/." DESTINATION "include"
     FILES_MATCHING
     PATTERN "*.h"
     )
@@ -334,5 +434,4 @@ endif(INSTALL_DEV)
 if(MSVC)
   target_compile_definitions(tvm PRIVATE -DTVM_EXPORTS)
   target_compile_definitions(tvm_runtime PRIVATE -DTVM_EXPORTS)
-  target_compile_definitions(nnvm_compiler PRIVATE -DNNVM_EXPORTS)
 endif()

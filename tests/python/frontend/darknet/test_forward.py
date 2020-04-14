@@ -23,6 +23,7 @@ by the script.
 """
 import numpy as np
 import tvm
+from tvm import te
 from tvm.contrib import graph_runtime
 from tvm.contrib.download import download_testdata
 download_testdata.__test__ = False
@@ -189,6 +190,18 @@ def test_forward_resnet50():
     verify_darknet_frontend(net)
     LIB.free_network(net)
 
+def test_forward_resnext50():
+    '''test resnet50 model'''
+    model_name = 'resnext50'
+    cfg_name = model_name + '.cfg'
+    weights_name = model_name + '.weights'
+    cfg_url = 'https://github.com/pjreddie/darknet/blob/master/cfg/' + cfg_name + '?raw=true'
+    weights_url = 'http://pjreddie.com/media/files/' + weights_name + '?raw=true'
+    net = _load_net(cfg_url, cfg_name, weights_url, weights_name)
+    verify_darknet_frontend(net)
+    LIB.free_network(net)
+
+
 def test_forward_yolov2():
     '''test yolov2 model'''
     model_name = 'yolov2'
@@ -239,7 +252,7 @@ def test_forward_dense_batchnorm():
     layer = LIB.make_connected_layer(1, 12, 2, 1, 1, 0)
     for i in range(5):
         layer.rolling_mean[i] = np.random.rand(1)
-        layer.rolling_variance[i] = np.random.rand(1)
+        layer.rolling_variance[i] = np.random.rand(1) + 0.5
         layer.scales[i] = np.random.rand(1)
     net.layers[0] = layer
     net.w = net.h = 2
@@ -273,7 +286,7 @@ def test_forward_conv_batch_norm():
     layer = LIB.make_convolutional_layer(1, 224, 224, 3, 32, 1, 3, 2, 0, 1, 1, 0, 0, 0)
     for i in range(32):
         layer.rolling_mean[i] = np.random.rand(1)
-        layer.rolling_variance[i] = np.random.rand(1)
+        layer.rolling_variance[i] = np.random.rand(1) + 0.5
     net.layers[0] = layer
     net.w = net.h = 224
     LIB.resize_network(net, 224, 224)
@@ -441,6 +454,7 @@ def test_forward_rnn():
 
 if __name__ == '__main__':
     test_forward_resnet50()
+    test_forward_resnext50()
     test_forward_alexnet()
     test_forward_extraction()
     test_forward_yolov2()

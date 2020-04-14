@@ -15,25 +15,26 @@
 # specific language governing permissions and limitations
 # under the License.
 import tvm
+from tvm import te
 from tvm import relay
 import tvm.relay.testing
 import numpy as np
 from tvm.relay import Expr
-from tvm.relay.analysis import alpha_equal, assert_alpha_equal, assert_graph_equal, free_vars
+from tvm.relay.analysis import free_vars
 
 do_print = [False]
 
-SEMVER = "v0.0.3\n"
+SEMVER = "v0.0.4\n"
 
-def astext(p, graph_equal=False):
+def astext(p, unify_free_vars=False):
     txt = p.astext()
     if isinstance(p, Expr) and free_vars(p):
         return txt
     x = relay.fromtext(txt)
-    if graph_equal:
-        assert_graph_equal(x, p)
+    if unify_free_vars:
+        tvm.ir.assert_structural_equal(x, p, map_free_vars=True)
     else:
-        assert_alpha_equal(x, p)
+        tvm.ir.assert_structural_equal(x, p)
     return txt
 
 def show(text):
@@ -58,7 +59,7 @@ def test_env():
     z = relay.add(x, y)
     z = relay.add(z, z)
     f = relay.Function([x, y], z)
-    env = relay.Module()
+    env = tvm.IRModule()
     env["myf"] = f
     text = astext(env)
     assert "def @myf" in text
@@ -70,7 +71,7 @@ def test_env():
 
 
 def test_meta_data():
-    n, c, h, w = tvm.var("n"), 10, 224, 224
+    n, c, h, w = te.size_var("n"), 10, 224, 224
     x = relay.var("x", shape=(n, c, h, w))
     w = relay.var("w")
     z = relay.nn.conv2d(x, w,
@@ -78,12 +79,12 @@ def test_meta_data():
                         padding=(1, 1),
                         channels=2)
     f = relay.Function([x, w], z)
-    text = astext(f, graph_equal=True)
+    text = astext(f, unify_free_vars=True)
     text_no_meta = str(f)
     assert "channels=2" in text
     assert "channels=2" in text_no_meta
-    assert "meta[Variable][0]" in text
-    assert "meta[Variable][0]" in text_no_meta
+    assert "meta[tir.SizeVar][0]" in text
+    assert "meta[tir.SizeVar][0]" in text_no_meta
     assert "type_key" in text
     assert "type_key" not in text_no_meta
 
@@ -122,7 +123,7 @@ def test_let_if_scope():
 
     f = relay.Function([x, y, cond], result)
     text = astext(f)
-    assert text.count("{") == 4
+    assert text.count("{") == 3
     assert "%cond: bool" in text
     show(astext(f))
 
@@ -169,18 +170,22 @@ def test_inception_v3():
     net, params = tvm.relay.testing.inception_v3.get_workload(batch_size=1)
     astext(net)
 
+
 def test_squeezenet():
     for version in ['1.0', '1.1']:
         net, params = tvm.relay.testing.squeezenet.get_workload(batch_size=1, version=version)
         astext(net)
 
+
 def test_vgg():
     net, params = tvm.relay.testing.vgg.get_workload(batch_size=1)
     astext(net)
 
+
 def test_densenet():
     net, params = tvm.relay.testing.densenet.get_workload(batch_size=1)
     astext(net)
+
 
 def test_call_node_order():
     x = relay.var("x")
@@ -196,6 +201,7 @@ def test_call_node_order():
          "};\n"
          "%2(%1)")
 
+
 def test_let_inlining():
     tup = relay.Tuple([relay.const(0), relay.const(0)])
     x = relay.var("x")
@@ -208,9 +214,31 @@ def test_let_inlining():
         ("let %x = (0, 0);\n"
          "%x")
 
+
 def test_zeros():
     x = relay.op.zeros([], "float32")
     astext(x)
+
+
+def test_unapplied_constructor():
+    type_def_str = r"""
+type List[A] {
+  Cons(A, List[A]),
+  Nil,
+}
+    """
+    main_def_str = r"""
+def @main[A]() -> fn (A, List[A]) -> List[A] {
+  Cons
+}
+    """
+    mod = relay.fromtext(SEMVER + type_def_str + main_def_str)
+    mod_str = str(mod)
+    # ensure constructors are printed correctly in type definitions (with their
+    # signature) and as exprs (without their signature)
+    assert type_def_str.strip() in mod_str
+    assert main_def_str.strip() in mod_str
+
 
 if __name__ == "__main__":
     do_print[0] = True
@@ -233,3 +261,4 @@ if __name__ == "__main__":
     test_let_if_scope()
     test_variable_name()
     test_call_node_order()
+    test_unapplied_constructor()

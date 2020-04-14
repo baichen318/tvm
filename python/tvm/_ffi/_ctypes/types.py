@@ -16,8 +16,6 @@
 # under the License.
 """The C Types used in API."""
 # pylint: disable=invalid-name
-from __future__ import absolute_import as _abs
-
 import ctypes
 import struct
 from ..base import py_str, check_call, _LIB
@@ -75,9 +73,9 @@ def _return_context(value):
 
 
 def _wrap_arg_func(return_f, type_code):
-    tcode = ctypes.c_int(type_code)
     def _wrap_func(x):
-        check_call(_LIB.TVMCbArgToReturn(ctypes.byref(x), tcode))
+        tcode = ctypes.c_int(type_code)
+        check_call(_LIB.TVMCbArgToReturn(ctypes.byref(x), ctypes.byref(tcode)))
         return return_f(x)
     return _wrap_func
 

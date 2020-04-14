@@ -15,16 +15,19 @@
 # specific language governing permissions and limitations
 # under the License.
 """Test legalize pass"""
+import numpy as np
 import tvm
+from tvm import te
 
 from tvm import relay
-from tvm.relay.op import register_legalize
+from tvm.contrib import graph_runtime
 from tvm.relay import transform, analysis
+from tvm.relay.testing.temp_op_attr import TempOpAttr
 
 
 def run_opt_pass(expr, passes):
     passes = passes if isinstance(passes, list) else [passes]
-    mod = relay.Module.from_expr(expr)
+    mod = tvm.IRModule.from_expr(expr)
     seq = transform.Sequential(passes)
     with transform.PassContext(opt_level=3):
         mod = seq(mod)
@@ -44,8 +47,7 @@ def test_legalize():
         y = relay.Function([x, weight], y)
         return y
 
-    @register_legalize("nn.conv2d", level=100)
-    def legalize_conv2d(attrs, inputs, arg_types):
+    def legalize_conv2d(attrs, inputs, types):
         data, weight = inputs
         weight = relay.multiply(weight, relay.const(2.0, "float32"))
         return relay.nn.conv2d(data, weight, **attrs)
@@ -61,11 +63,12 @@ def test_legalize():
         y = relay.Function([x, weight], y)
         return y
 
-    a = before()
-    a = run_opt_pass(a, transform.Legalize())
-    b = run_opt_pass(expected(), transform.InferType())
+    with TempOpAttr("nn.conv2d", "FTVMLegalize", legalize_conv2d):
+        a = before()
+        a = run_opt_pass(a, transform.Legalize())
+        b = run_opt_pass(expected(), transform.InferType())
 
-    assert analysis.alpha_equal(a, b), "Actual = \n" + str(a)
+    assert tvm.ir.structural_equal(a, b), "Actual = \n" + str(a)
 
 def test_legalize_none():
     """Test doing nothing by returning 'None' """
@@ -77,18 +80,62 @@ def test_legalize_none():
 
     called = [False]
 
-    @register_legalize("nn.global_max_pool2d", level=101)
-    def legalize_conv2d(attrs, inputs, arg_types):
+    def legalize_conv2d(attrs, inputs, types):
         called[0] = True
         return None
 
-    a = before()
-    a = run_opt_pass(a, transform.Legalize())
+    with TempOpAttr("nn.global_max_pool2d", "FTVMLegalize", legalize_conv2d):
+        a = before()
+        a = run_opt_pass(a, transform.Legalize())
+        b = run_opt_pass(before(), transform.InferType())
 
-    b = before()
-    b = run_opt_pass(b, transform.InferType())
-    assert analysis.alpha_equal(a, b), "Actual = \n" + str(a)
+    assert tvm.ir.structural_equal(a, b), "Actual = \n" + str(a)
     assert(called[0])
+
+def test_legalize_multiple_ops():
+    """Test directly replacing an operator with a new one"""
+    def before():
+        x = relay.var("x", shape=(1, 64, 56, 56))
+        weight = relay.var('weight', shape=(64, 64, 3, 3))
+        y = relay.nn.conv2d(x, weight,
+                            channels=64,
+                            kernel_size=(3, 3),
+                            padding=(1, 1))
+        y = relay.nn.relu(y)
+        y = relay.Function([x, weight], y)
+        return y
+
+    def legalize_conv2d(attrs, inputs, types):
+        data, weight = inputs
+        weight = relay.multiply(weight, relay.const(2.0, "float32"))
+        return relay.nn.conv2d(data, weight, **attrs)
+
+    def legalize_relu(attrs, inputs, types):
+        data = inputs[0]
+        add = relay.add(tvm.relay.const(0, "float32"), data)
+        return relay.nn.relu(add)
+
+
+    def expected():
+        x = relay.var("x", shape=(1, 64, 56, 56))
+        weight = relay.var('weight', shape=(64, 64, 3, 3))
+        y = relay.nn.conv2d(x, relay.multiply(weight, relay.const(2.0, "float32")),
+                            channels=64,
+                            kernel_size=(3, 3),
+                            padding=(1, 1))
+        y = relay.add(tvm.relay.const(0, "float32"), y)
+        y = relay.nn.relu(y)
+        y = relay.Function([x, weight], y)
+        return y
+
+    with TempOpAttr("nn.conv2d", "FTVMLegalize", legalize_conv2d):
+        with TempOpAttr("nn.relu", "FTVMLegalize", legalize_relu):
+            a = before()
+            a = run_opt_pass(a, transform.Legalize())
+            b = run_opt_pass(expected(), transform.InferType())
+
+    assert tvm.ir.structural_equal(a, b), "Actual = \n" + str(a)
+
 
 def test_legalize_multi_input():
     """Test directly replacing an operator with a new one"""
@@ -100,13 +147,13 @@ def test_legalize_multi_input():
         func = relay.Function([x, y, z], func)
         return func
 
-    @register_legalize("concatenate", level=100)
-    def legalize_concatenate(attrs, inputs, arg_types):
+    def legalize_concatenate(attrs, inputs, types):
         # Check that the correct multi-input case is handled.
         assert len(inputs) == 1
         assert isinstance(inputs[0], tvm.relay.expr.Tuple)
-        assert len(arg_types) == 1
-        assert isinstance(arg_types[0], tvm.relay.ty.TupleType)
+        assert len(types) == 2
+        assert isinstance(types[0], tvm.relay.ty.TupleType)
+        assert isinstance(types[1], tvm.relay.ty.TensorType)
         return None
 
     def expected():
@@ -117,14 +164,17 @@ def test_legalize_multi_input():
         func = relay.Function([x, y, z], func)
         return func
 
-    a = before()
-    a = run_opt_pass(a, transform.Legalize())
-    b = run_opt_pass(expected(), transform.InferType())
 
-    assert analysis.alpha_equal(a, b), "Actual = \n" + str(a)
+    with TempOpAttr("concatenate", "FTVMLegalize", legalize_concatenate):
+        a = before()
+        a = run_opt_pass(a, transform.Legalize())
+        b = run_opt_pass(expected(), transform.InferType())
+
+    assert tvm.ir.structural_equal(a, b), "Actual = \n" + str(a)
 
 
 if __name__ == "__main__":
     test_legalize()
     test_legalize_none()
+    test_legalize_multiple_ops()
     test_legalize_multi_input()

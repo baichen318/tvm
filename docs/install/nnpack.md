@@ -64,6 +64,8 @@ export PATH="${PATH}:~/ninja"
 
 The new CMAKE version of NNPACK download [Peach](https://github.com/Maratyszcza/PeachPy) and other dependencies alone
 
+Note: at least on OS X, running `ninja install` below will overwrite googletest libraries installed in `/usr/local/lib`. If you build googletest again to replace the nnpack copy, be sure to pass `-DBUILD_SHARED_LIBS=ON` to `cmake`.
+
 ```bash
 git clone --recursive https://github.com/Maratyszcza/NNPACK.git
 cd NNPACK
@@ -85,7 +87,7 @@ sudo ldconfig
 ## Build TVM with NNPACK support
 
 ```bash
-git clone --recursive https://github.com/dmlc/tvm
+git clone --recursive https://github.com/apache/incubator-tvm tvm
 ```
 
 * Set `set(USE_NNPACK ON)` in config.cmake.

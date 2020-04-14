@@ -18,7 +18,6 @@
  */
 
 /*!
- * Copyright (c) 2018 by Contributors
  * \file builtin_fp16.cc
  * \brief Functions for conversion between fp32 and fp16
 */
@@ -35,6 +34,16 @@ TVM_DLL TVM_WEAK uint16_t __gnu_f2h_ieee(float a) {
 }
 
 TVM_DLL TVM_WEAK float __gnu_h2f_ieee(uint16_t a) {
+  return __extendXfYf2__<uint16_t, uint16_t, 10, float, uint32_t, 23>(a);
+}
+
+#else
+
+TVM_DLL uint16_t __gnu_f2h_ieee(float a) {
+  return __truncXfYf2__<float, uint32_t, 23, uint16_t, uint16_t, 10>(a);
+}
+
+TVM_DLL float __gnu_h2f_ieee(uint16_t a) {
   return __extendXfYf2__<uint16_t, uint16_t, 10, float, uint32_t, 23>(a);
 }
 

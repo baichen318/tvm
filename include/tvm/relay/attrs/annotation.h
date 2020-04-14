@@ -24,7 +24,7 @@
 #ifndef TVM_RELAY_ATTRS_ANNOTATION_H_
 #define TVM_RELAY_ATTRS_ANNOTATION_H_
 
-#include <tvm/attrs.h>
+#include <tvm/ir/attrs.h>
 #include <string>
 
 namespace tvm {
@@ -41,6 +41,32 @@ struct OnDeviceAttrs : public tvm::AttrsNode<OnDeviceAttrs> {
       .describe(
          "The virutal device/context type that an expression is annotated with.")
       .set_default(0);
+  }
+};
+
+/*!
+ * \brief Annotate an expression to be cast into specific data type.
+ */
+struct CastHintAttrs : public tvm::AttrsNode<CastHintAttrs> {
+  DataType dtype;
+
+  TVM_DECLARE_ATTRS(CastHintAttrs, "relay.attrs.CastHintAttrs") {
+    TVM_ATTR_FIELD(dtype)
+      .describe(
+         "The data type denoted to be cast.");
+  }
+};
+
+/*!
+ * \brief Options for the operators used to annotate a compiler.
+ */
+struct CompilerAttrs : public tvm::AttrsNode<CompilerAttrs> {
+  /*! \brief A 3rd party compiler for code generation. */
+  std::string compiler;
+
+  TVM_DECLARE_ATTRS(CompilerAttrs, "relay.attrs.CompilerAttrs") {
+    TVM_ATTR_FIELD(compiler)
+      .describe("A 3rd party compiler used for code generation.");
   }
 };
 

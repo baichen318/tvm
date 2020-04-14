@@ -14,19 +14,15 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-#pylint: disable=unused-argument
+#pylint: disable=unused-argument, not-context-manager
 """Automatic quantization toolkit."""
-from __future__ import absolute_import
-import numpy as np
+import tvm.ir
+from tvm.runtime import Object
 
 from . import _quantize
+from ._calibrate import calibrate
 from .. import expr as _expr
-from .. import module as _module
-from .. import analysis as _analysis
 from .. import transform as _transform
-from .. import op as _op
-from ... import make as _make
-from ..base import NodeBase, register_relay_node
 
 
 class QAnnotateKind(object):
@@ -50,8 +46,14 @@ def kind2str(kind):
     return str_map[kind]
 
 
-@register_relay_node("relay.quantize.QConfig")
-class QConfig(NodeBase):
+def _forward_op(ref_call, args):
+    """forward the operator of ref_call with provided arguments"""
+    return _expr.Call(
+        ref_call.op, args, ref_call.attrs, ref_call.type_args)
+
+
+@tvm._ffi.register_object("relay.quantize.QConfig")
+class QConfig(Object):
     """Configure the quantization behavior by setting config variables.
 
     Note
@@ -72,11 +74,15 @@ class QConfig(NodeBase):
         "dtype_input": "int8",
         "dtype_weight": "int8",
         "dtype_activation": "int32",
+        "calibrate_mode": "global_scale",
         "global_scale": 8.0,
+        "weight_scale": "power2",
         "skip_conv_layers": [0],
+        "do_simulation": False,
         "round_for_shift": True,
-        "store_lowbit_output": True,
         "debug_enabled_ops": None,
+        "rounding": "UPWARD",
+        "calibrate_chunk_by": -1,
     }
 
     # pylint: disable=no-member
@@ -92,6 +98,7 @@ class QConfig(NodeBase):
         self.handle = handle
 
     def guard(self, ref_call):
+        """Return true if op is enabled, otherwise return false"""
         op_name = ref_call.op.name
         if self.debug_enabled_ops is not None:
             name_list = [x.value for x in self.debug_enabled_ops]
@@ -126,9 +133,7 @@ def current_qconfig():
     """Get the current quantization configuration."""
     return _quantize._GetCurrentQConfig()
 
-# TODO(tmoreau89, ZihengJiang) the skip parameters are
-# hacky - we should explore a more future-proof way to
-# skip operators based on pattern matching
+
 def qconfig(**kwargs):
     """Configure the quantization behavior by setting config variables.
 
@@ -137,24 +142,37 @@ def qconfig(**kwargs):
     nbit_dict: dict of QAnnotateKind -> int
         Number of bit for every kind of annotate field.
 
+    calibrate_mode: str
+        The calibration mode. 'global_scale' or 'kl_divergence'.
+        global_scale: use global scale
+        kl_divergence: find scales by kl divergence on the dataset.
+
     global_scale: float
         The global scale for calibration.
 
+    weight_scale: str
+        The way to calculate scales for weights (annotated with QAnnotateKind.WEIGHT).
+        power2: Find the maximum of the absolute value of the tensor, and then round up to power
+        of two.
+        max: Find the maximum of the absolute value of the tensor
+
     skip_conv_layers: list
         Specifying which layers to be skipped. Provide a list of indices
-        that indicate which conv2d layers to leave untouched.
+        that indicate which conv2d layers to leave untouched. Start from 0.
+
+    do_simulation: boolean
+        Whether to do simulation with float operation only.
 
     round_for_shift: boolean
         Whether to add bias for rounding during shift.
-
-    store_lowbit_output: boolean
-        Whether to store low-bit integer back as output before dequantizing.
-        Some accelerators need this, e.g. VTA.
 
     debug_enabled_ops: None or list of str
         Partially quantize specified operators for debugging. The default value
         is None, which means will try to call all operartors' annotate rewrite
         function.
+
+    rounding: "UPWARD" or "TONEAREST"
+        Rounding direction for fixed point multiplications.
 
     Returns
     -------
@@ -163,144 +181,69 @@ def qconfig(**kwargs):
     """
     node_args = {k: v if k not in kwargs else kwargs[k]
                  for k, v in QConfig._node_defaults.items()}
-    return _make.node("relay.quantize.QConfig", **node_args)
+    return tvm.ir.make_node("relay.quantize.QConfig", **node_args)
 
 
-class AnnotateContext(object):
-    """A global singleton annotate scope"""
+class QuantizeContext(object):
+    """An internal used global context object for annotation,
+    for putting some state variables like `conv2d_counter`."""
     Current = None
 
     def __init__(self):
         self.qnode_map = dict()
         self._conv2d_counter = 0
+        self._stop_quantize = False
+
+    def check_to_skip(self, ref_call):
+        """Check the index of conv2d layer to decide whether to
+        skip the current operator."""
+        if self._stop_quantize:
+            return True
+
+        if current_qconfig().skip_conv_layers is not None:
+            # check skip conv layers
+            skipped_indices = [int(x) for x in current_qconfig().skip_conv_layers]
+            if self._conv2d_counter in skipped_indices:
+                if ref_call.op.name == 'nn.conv2d':
+                    self._conv2d_counter += 1
+                return True
+            if ref_call.op.name == 'nn.conv2d':
+                self._conv2d_counter += 1
+
+        return False
+
+    def stop_quantize(self):
+        self._stop_quantize = True
+
+    def reset(self):
+        self._conv2d_counter = 0
+        self._stop_quantize = False
 
     def __enter__(self):
-        self._conv2d_counter = 0
+        self.reset()
         return self
-
-    def conv2d_counter(self):
-        """Get the counter for conv2d."""
-        return self._conv2d_counter
-
-    def count_conv2d(self):
-        """Increase the value of the conv2d counter by one."""
-        self._conv2d_counter += 1
 
     def __exit__(self, ptype, value, traceback):
         pass
 
 
-def annotate_context():
+def quantize_context():
     """Get the global singleton scope"""
-    if AnnotateContext.Current is None:
-        AnnotateContext.Current = AnnotateContext()
-    return AnnotateContext.Current
+    if QuantizeContext.Current is None:
+        QuantizeContext.Current = QuantizeContext()
+    return QuantizeContext.Current
 
 
-def collect_stats(graph):
-    """Given an annotated graph, create a profile graph to collect profile data from the
-    calibration dataset. This pass collects simulated_quantize op input into a tuple.
-    Simulated_quantize ops are rewritten to identity mode. The tuple is the output of the profile
-    graph.
-
-    Parameters
-    ----------
-    graph: Function
-        The simulation graph after annotation.
+def partition():
+    """Partition graph into small low-precision sections by `cast_hint` and
+    `stop_fusion`.
 
     Returns
     -------
-    ret: Function
-        The profile graph which outputs a tuple of profile data.
+    ret: tvm.relay.Pass
+        The registered pass for VTA rewrite.
     """
-    return _quantize.CollectStats(graph)
-
-
-def calibrate(graph, mod=None, ctx=None, weight_scales='power2', scales=None):
-    """The calibrate procedure will try to calculate the content of
-    dom_scale, nbit, clip_min, clip_max for every `simulated_quantize`
-    operator.
-
-    Parameters
-    ---------
-    graph: Function
-        The simulation graph after annotation.
-
-    mod: tvm.relay.Module
-        The module where calibration happens on.
-
-    ctx: tvm.relay.PassContext
-        The pass context used for calibration.
-
-    weight_scales: 'power2' or 'max'.
-        The way to calculate scales for weights (annotated with QAnnotateKind.WEIGHT).
-        power2: Find the maximum of the absolute value of the tensor, and then round up to power
-        of two.
-        max: Find the maximum of the absolute value of the tensor.
-
-    scales: List[float]
-        Pre-calculated scales for input and activations. Length and the order of elements of the
-        scales list should match the output tuple of the profile graph created by collect_stats.
-
-    Returns
-    -------
-    ret: Function
-        The graph after calibration
-    """
-    def power2_scale(arr):
-        """calculate weight scale with nearest mode-2 scale"""
-        val = np.amax(np.abs(arr.asnumpy()))
-        return 2**np.math.ceil(np.math.log(val, 2)) if val > 0 else 1.0
-
-    def max_scale(arr):
-        """calculate weight scale with maximum absolute value"""
-        val = np.amax(np.abs(arr.asnumpy()))
-        return val
-
-    scale_idx = 0
-
-    cfg = current_qconfig()
-    const_params = {}
-    quantize_op = _op.get("relay.op.annotation.simulated_quantize")
-
-    def visit_func(expr):
-        """Internal visit function"""
-        nonlocal scale_idx
-        if isinstance(expr, _expr.Call) and expr.op == quantize_op:
-            _, ndom_scale, nclip_min, nclip_max = expr.args
-            attrs = expr.attrs
-            kind = attrs.kind
-            nbit = cfg.get_nbit_by_kind(kind)
-
-            valid_bit = nbit - attrs.sign
-            if kind in [QAnnotateKind.WEIGHT]:
-                if all([isinstance(arg, _expr.Constant)
-                        for arg in [ndom_scale, nclip_min, nclip_max]]):
-                    return
-                var = expr.args[0]
-                assert isinstance(var, _expr.Constant)
-                if weight_scales == 'max':
-                    scale = max_scale(var.data)
-                elif weight_scales == 'power2':
-                    scale = power2_scale(var.data)
-                else:
-                    raise ValueError('{} not supported'.format(weight_scales))
-            elif scales is not None:
-                scale = scales[scale_idx]
-                scale_idx += 1
-            else:
-                scale = cfg.global_scale
-
-            def _make_const(val):
-                return _expr.const(val, 'float32')
-
-            valid_range = 2**valid_bit
-            const_params[ndom_scale] = _make_const(scale / valid_range)
-            const_params[nclip_min] = _make_const(- (valid_range - 1))
-            const_params[nclip_max] = _make_const((valid_range - 1))
-
-    _analysis.post_order_visit(graph, visit_func)
-    return _expr.bind(graph, const_params)
+    return _quantize.QuantizePartition()
 
 
 def annotate():
@@ -330,17 +273,6 @@ def realize():
     return _quantize.QuantizeRealize()
 
 
-def rewrite_for_vta():
-    """Performs rewriting for VTA target.
-
-    Returns
-    -------
-    ret: tvm.relay.Pass
-        The registered pass for VTA rewrite.
-    """
-    return _quantize.QuantizeRewriteForVTA()
-
-
 def _bind_params(func, params):
     """Bind the params to the expression.
     """
@@ -362,7 +294,24 @@ def _bind_params(func, params):
     return _expr.bind(func, bind_dict)
 
 
-def quantize(graph, params=None, dataset=None):
+def prerequisite_optimize(mod, params=None):
+    """ Prerequisite optimization passes for quantization. Perform
+    "SimplifyInference", "FoldScaleAxis", "FoldConstant", and
+    "CanonicalizeOps" optimization before quantization. """
+    optimize = _transform.Sequential([_transform.SimplifyInference(),
+                                      _transform.FoldConstant(),
+                                      _transform.FoldScaleAxis(),
+                                      _transform.CanonicalizeOps(),
+                                      _transform.FoldConstant()])
+
+    if params:
+        mod['main'] = _bind_params(mod['main'], params)
+
+    mod = optimize(mod)
+    return mod
+
+
+def quantize(mod, params=None, dataset=None):
     """ The quantization procedure. Before running the three main
     procedure of quantization, "annotate", "calibrate" and "realize"
     , we need to do "SimplifyInference", "FoldScaleAxis", "FoldConstant"
@@ -370,8 +319,8 @@ def quantize(graph, params=None, dataset=None):
 
     Parameters
     ---------
-    graph: Function
-        The original graph.
+    mod: Module
+        The original module.
 
     params : dict of str to NDArray
         Input parameters to the graph that do not change
@@ -385,33 +334,22 @@ def quantize(graph, params=None, dataset=None):
     ret: Function
         The graph after quantization
     """
-    if params:
-        graph = _bind_params(graph, params)
+    mod = prerequisite_optimize(mod, params)
 
-    mod = _module.Module.from_expr(graph)
-    # Perform "SimplifyInference", "FoldScaleAxis", "FoldConstant", and
-    # "CanonicalizeOps" optimization before quantization.
-    optimize = _transform.Sequential([_transform.SimplifyInference(),
-                                      _transform.FoldConstant(),
-                                      _transform.FoldScaleAxis(),
-                                      _transform.CanonicalizeOps(),
-                                      _transform.FoldConstant()])
-
-    calibrate_pass = _transform.function_pass(calibrate, opt_level=1,
-                                              name="QuantizeCalibrate")
-    # Quantize pass list
-    quant_passes = [annotate(),
-                    calibrate_pass,
-                    realize(),
-                    _transform.FoldConstant()]
-    if current_qconfig().store_lowbit_output:
-        quant_passes = [rewrite_for_vta()] + quant_passes
+    calibrate_pass = _transform.module_pass(calibrate(dataset), opt_level=1,
+                                            name="QuantizeCalibrate")
+    quant_passes = [partition(),
+                    annotate(),
+                    calibrate_pass]
+    if not current_qconfig().do_simulation:
+        quant_passes.append(realize())
+    quant_passes.append(_transform.FoldConstant())
     quantize_seq = _transform.Sequential(quant_passes)
     with _transform.PassContext(opt_level=3,
                                 required_pass=["QuantizeAnnotate",
                                                "QuantizeCalibrate",
                                                "QuantizeRealize"]):
-        mod = optimize(mod)
-        mod = quantize_seq(mod)
+        with quantize_context():
+            mod = quantize_seq(mod)
 
-    return mod["main"]
+    return mod

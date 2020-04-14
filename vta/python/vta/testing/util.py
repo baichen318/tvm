@@ -37,7 +37,7 @@ def run(run_func):
         # Compile vta on your host with make at the root.
         # Make sure TARGET is set to "sim" in the config.json file.
         # Then launch the RPC server on the host machine
-        # with ./apps/pynq_rpc/start_rpc_server.sh
+        # with ./apps/vta_rpc/start_rpc_server.sh
         # Set your VTA_LOCAL_SIM_RPC environment variable to
         # the port it's listening to, e.g. 9090
         local_rpc = int(os.environ.get("VTA_LOCAL_SIM_RPC", "0"))
@@ -52,15 +52,15 @@ def run(run_func):
                 assert simulator.enabled()
             run_func(env, rpc.LocalSession())
 
-    elif env.TARGET in ["pynq", "ultra96"]:
+    elif env.TARGET in ["pynq", "ultra96", "de10nano"]:
         # The environment variables below should be set if we are using
         # a tracker to obtain a remote for a test device
         tracker_host = os.environ.get("TVM_TRACKER_HOST", None)
         tracker_port = os.environ.get("TVM_TRACKER_PORT", None)
         # Otherwise, we can set the variables below to directly
         # obtain a remote from a test device
-        pynq_host = os.environ.get("VTA_PYNQ_RPC_HOST", None)
-        pynq_port = os.environ.get("VTA_PYNQ_RPC_PORT", None)
+        pynq_host = os.environ.get("VTA_RPC_HOST", None)
+        pynq_port = os.environ.get("VTA_RPC_PORT", None)
         # Run device from fleet node if env variables are defined
         if tracker_host and tracker_port:
             remote = autotvm.measure.request_remote(env.TARGET,
@@ -75,7 +75,7 @@ def run(run_func):
                 run_func(env, remote)
             else:
                 raise RuntimeError(
-                    "Please set the VTA_PYNQ_RPC_HOST and VTA_PYNQ_RPC_PORT environment variables")
+                    "Please set the VTA_RPC_HOST and VTA_RPC_PORT environment variables")
 
     else:
         raise RuntimeError("Unknown target %s" % env.TARGET)

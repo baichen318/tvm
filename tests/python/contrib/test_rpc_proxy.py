@@ -15,6 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 import tvm
+from tvm import te
 import logging
 import numpy as np
 import time
@@ -24,7 +25,7 @@ from tvm import rpc
 def rpc_proxy_check():
     """This is a simple test function for RPC Proxy
 
-    It is not included as nosetests, because:
+    It is not included as pytests, because:
     - It depends on tornado
     - It relies on the fact that Proxy starts before client and server connects,
       which is often the case but not always
@@ -37,7 +38,7 @@ def rpc_proxy_check():
         web_port = 8888
         prox = proxy.Proxy("localhost", web_port=web_port)
         def check():
-            if not tvm.module.enabled("rpc"):
+            if not tvm.runtime.enabled("rpc"):
                 return
             @tvm.register_func("rpc.test2.addone")
             def addone(x):

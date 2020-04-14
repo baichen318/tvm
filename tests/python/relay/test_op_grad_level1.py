@@ -15,10 +15,14 @@
 # specific language governing permissions and limitations
 # under the License.
 import numpy as np
+import pytest
+
 import tvm
+from tvm import te
 from tvm import relay
+from tvm.relay.testing import check_grad, ctx_list, run_infer_type
 from tvm.relay.transform import gradient
-from tvm.relay.testing import ctx_list, run_infer_type
+
 
 def sigmoid(x):
     one = np.ones_like(x)
@@ -29,6 +33,7 @@ def relu(x):
     x_copy = np.copy(x)
     np.maximum(x_copy, 0, x_copy)
     return x_copy
+
 
 def test_unary_op():
     def check_single_op(opfunc, ref):
@@ -58,7 +63,9 @@ def test_unary_op():
                         (tvm.relay.abs, lambda x: np.where(x < 0, -np.ones_like(x), np.ones_like(x))),
                         (relay.nn.relu, lambda x: np.where(x < 0, np.zeros_like(x), np.ones_like(x))),
                         (tvm.relay.cos, lambda x: -1.0 * np.sin(x)),
-                        (tvm.relay.sin, lambda x: np.cos(x))]:
+                        (tvm.relay.sin, lambda x: np.cos(x)),
+                        (tvm.relay.tan, lambda x: 1.0 / (np.cos(x) ** 2)),
+                        (tvm.relay.atan, lambda x: 1 / (1 + np.power(x, 2.0)))]:
         check_single_op(opfunc, ref)
 
 
@@ -93,6 +100,31 @@ def test_binary_op():
         check_binary_op(opfunc, ref)
 
 
+def test_softmax_grad():
+    data = relay.var("data", relay.TensorType((1, 16), "float64"))
+    fwd_func = relay.Function([data], relay.nn.softmax(data))
+    check_grad(fwd_func, scale=1)
+
+
+def test_log_softmax_grad():
+    data = relay.var("data", relay.TensorType((2, 16), "float64"))
+    fwd_func = relay.Function([data], relay.nn.log_softmax(data))
+    check_grad(fwd_func, scale=1)
+
+
+def verify_bias_add(d_shape, b_shape, axis=1):
+    data = relay.var("data", relay.TensorType(d_shape, "float32"))
+    bias = relay.var("bias", relay.TensorType(b_shape, "float32"))
+    fwd_func = relay.Function([data, bias], relay.nn.bias_add(data, bias, axis=axis))
+    check_grad(fwd_func)
+
+
+def test_bias_add_grad():
+    verify_bias_add((1, 16), (16,))
+    verify_bias_add((1, 8, 2, 2), (8,))
+    verify_bias_add((1, 2, 2, 8), (8,), 3)
+    verify_bias_add((4, 8), (8,))
+
+
 if __name__ == "__main__":
-    test_unary_op()
-    test_binary_op()
+    pytest.main([__file__])

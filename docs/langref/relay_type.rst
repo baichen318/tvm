@@ -80,7 +80,7 @@ running a program.
 
 For example, here is a simple concrete tensor type corresponding to a 10-by-10 tensor of 32-bit floats:
 
-.. code-block:: python
+.. code-block::
 
    Tensor[(10, 10), float32]
 
@@ -101,7 +101,8 @@ For example, in the below code, :code:`%t` is of type
 :code:`(Tensor[(), bool], Tensor[(10, 10), float32])`
 and :code:`%c` is of type :code:`Tensor[(10, 10), float32]`.
 
-.. code-block:: python
+.. code-block::
+
    let %t = (False, Constant(1, (10, 10), float32));
    let %c = %t.1;
    %c
@@ -115,7 +116,7 @@ Type Parameter
 
 Type parameters represent placeholder types used for polymorphism in functions.
 Type parameters are specified according to *kind*, corresponding to the types
-those parameters are allowed to replace: 
+those parameters are allowed to replace:
 
 - :code:`Type`, corresponding to top-level Relay types like tensor types, tuple types, and function types
 - :code:`BaseType`, corresponding to the base type of a tensor (e.g., :code:`float32`, :code:`bool`)
@@ -134,7 +135,7 @@ Like normal parameters, concrete arguments must be given for type parameters at 
 For example, :code:`s` below is a type parameter of kind :code:`Shape` and it will
 be substituted with :code:`(10, 10)` at the call site below:
 
-.. code-block:: python
+.. code-block::
 
    def @plus<s : Shape>(%t1 : Tensor[s, float32], %t2 : Tensor[s, float32]) {
         add(%t1, %t2)
@@ -195,6 +196,7 @@ to hold, if such values exist.
 For example we can define an identity relation to be:
 
 .. code-block:: prolog
+
     Identity(I, I) :- true
 
 It is usually convenient to type operators
@@ -203,13 +205,15 @@ encodes all the necessary constraints on the argument types
 and the return type. For example, we can define the relation for :code:`flatten`:
 
 .. code-block:: prolog
+
     Flatten(Tensor(sh, bt), O) :-
       O = Tensor(sh[0], prod(sh[1:]))
 
 If we have a relation like :code:`Broadcast` it becomes possible
 to type operators like :code:`add`:
 
-.. code-block:: python
+.. code-block::
+
     add : fn<t1 : Type, t2 : Type, t3 : Type>(t1, t2) -> t3
                 where Broadcast
 
@@ -286,7 +290,7 @@ parameters must be treated as different types) and be
 recursive (a constructor for an ADT can take an instance of
 that ADT, thus an ADT like a tree or list can be inductively
 built up). The representation of ADTs in the type system must
-be able to accomodate these facts, as the below sections will detail.
+be able to accommodate these facts, as the below sections will detail.
 
 Global Type Variable
 ~~~~~~~~~~~~~~~~~~~~
@@ -312,7 +316,7 @@ Definitions (Type Data)
 ~~~~~~~~~~~~~~~~~~~~~~~
 
 Besides a name, an ADT needs to store the constructors that are used
-to define it and any type paramters used within them. These are
+to define it and any type parameters used within them. These are
 stored in the module, :ref:`analogous to global function definitions<module-description>`.
 
 While type-checking uses of ADTs, the type system sometimes must
@@ -355,7 +359,7 @@ This subsection uses the simple list ADT (included as a default
 ADT in Relay) to illustrate the constructs described in the previous
 sections. Its definition is as follows:
 
-.. code-block:: python
+.. code-block::
 
    data List<a> {
      Nil : () -> List
@@ -373,7 +377,7 @@ variable :code:`List` in the constructor definition.
 
 Below two instances of lists with their types given, using type calls:
 
-.. code-block:: python
+.. code-block::
 
    Cons(1, Cons(2, Nil())) # List[Tensor[(), int32]]
    Cons((1, 1), Cons((2, 2), Nil())) # List[(Tensor[(), int32], Tensor[(), int32])]
@@ -386,7 +390,7 @@ be specified.)
 Here are two lists that are rejected by the type system because
 the type parameters do not match:
 
-.. code-block:: python
+.. code-block::
 
    # attempting to put an integer on a list of int * int tuples
    Cons(1, Cons((1, 1), Nil()))

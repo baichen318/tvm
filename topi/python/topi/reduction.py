@@ -45,7 +45,7 @@ def sum(data, axis=None, keepdims=False):
 
     Parameters
     ----------
-    data : tvm.Tensor
+    data : tvm.te.Tensor
         The input tvm tensor
 
     axis : None or int or tuple of int
@@ -60,7 +60,7 @@ def sum(data, axis=None, keepdims=False):
 
     Returns
     -------
-    ret : tvm.Tensor
+    ret : tvm.te.Tensor
     """
     return cpp.sum(data, axis, keepdims)
 
@@ -70,7 +70,7 @@ def all(data, axis=None, keepdims=False):
 
     Parameters
     ----------
-    data : tvm.Tensor
+    data : tvm.te.Tensor
         The input tvm boolean tensor
 
     axis : None or int or tuple of int
@@ -85,9 +85,34 @@ def all(data, axis=None, keepdims=False):
 
     Returns
     -------
-    ret : tvm.Tensor
+    ret : tvm.te.Tensor
     """
     return cpp.all(data, axis, keepdims)
+
+
+def any(data, axis=None, keepdims=False):
+    """Logical OR of array elements over a given axis or a list of axes
+
+    Parameters
+    ----------
+    data : tvm.te.Tensor
+        The input tvm boolean tensor
+
+    axis : None or int or tuple of int
+        Axis or axes along which a logical OR is performed.
+        The default, axis=None, will perform logical OR over all elements of the input array.
+        If axis is negative it counts from the last to the first axis.
+
+    keepdims : bool
+        If this is set to True, the axes which are reduced are left in the result as dimensions
+        with size one.
+        With this option, the result will broadcast correctly against the input array.
+
+    Returns
+    -------
+    ret : tvm.te.Tensor
+    """
+    return cpp.any(data, axis, keepdims)
 
 
 def max(data, axis=None, keepdims=False):
@@ -95,7 +120,7 @@ def max(data, axis=None, keepdims=False):
 
     Parameters
     ----------
-    data : tvm.Tensor
+    data : tvm.te.Tensor
         The input tvm tensor
 
     axis : None or int or tuple of int
@@ -110,7 +135,7 @@ def max(data, axis=None, keepdims=False):
 
     Returns
     -------
-    ret : tvm.Tensor
+    ret : tvm.te.Tensor
     """
     return cpp.max(data, axis, keepdims)
 
@@ -120,7 +145,7 @@ def min(data, axis=None, keepdims=False):
 
     Parameters
     ----------
-    data : tvm.Tensor
+    data : tvm.te.Tensor
         The input tvm tensor
 
     axis : None or int or tuple of int
@@ -135,7 +160,7 @@ def min(data, axis=None, keepdims=False):
 
     Returns
     -------
-    ret : tvm.Tensor
+    ret : tvm.te.Tensor
     """
     return cpp.min(data, axis, keepdims)
 
@@ -145,7 +170,7 @@ def argmax(data, axis=None, keepdims=False):
 
     Parameters
     ----------
-    data : tvm.Tensor
+    data : tvm.te.Tensor
         The input tvm tensor
 
     axis : None or int or tuple of int
@@ -160,7 +185,7 @@ def argmax(data, axis=None, keepdims=False):
 
     Returns
     -------
-    ret : tvm.Tensor
+    ret : tvm.te.Tensor
     """
     return cpp.argmax(data, axis, keepdims)
 
@@ -170,7 +195,7 @@ def argmin(data, axis=None, keepdims=False):
 
     Parameters
     ----------
-    data : tvm.Tensor
+    data : tvm.te.Tensor
         The input tvm tensor
 
     axis : None or int or tuple of int
@@ -185,7 +210,7 @@ def argmin(data, axis=None, keepdims=False):
 
     Returns
     -------
-    ret : tvm.Tensor
+    ret : tvm.te.Tensor
     """
     return cpp.argmin(data, axis, keepdims)
 
@@ -195,7 +220,7 @@ def prod(data, axis=None, keepdims=False):
 
     Parameters
     ----------
-    data : tvm.Tensor
+    data : tvm.te.Tensor
         The input tvm tensor
 
     axis : None or int or tuple of int
@@ -210,6 +235,6 @@ def prod(data, axis=None, keepdims=False):
 
     Returns
     -------
-    ret : tvm.Tensor
+    ret : tvm.te.Tensor
     """
     return cpp.prod(data, axis, keepdims)

@@ -17,7 +17,41 @@
 #pylint: disable=invalid-name, unused-argument
 """Backend compiler related feature registration"""
 from __future__ import absolute_import
-from ..op import  register_schedule, schedule_injective
+
+import topi
+from .. import op as reg
+from .. import strategy
+from ..op import OpPattern
+
 
 # resize
-register_schedule("image.resize", schedule_injective)
+@reg.register_compute("image.resize")
+def compute_resize(attrs, inputs, out_type):
+    size = attrs.size
+    layout = attrs.layout
+    method = attrs.method
+    coord_trans = attrs.coordinate_transformation_mode
+    out_dtype = attrs.out_dtype
+    return [topi.image.resize(inputs[0], size, layout, method, coord_trans, out_dtype)]
+
+reg.register_injective_schedule("image.resize")
+
+
+# crop and resize
+@reg.register_compute("image.crop_and_resize")
+def compute_crop_and_resize(attrs, inputs, out_type):
+    crop_size = attrs.crop_size
+    layout = attrs.layout
+    method = attrs.method
+    extrapolation_value = attrs.extrapolation_value
+    out_dtype = attrs.out_dtype
+    return [topi.image.crop_and_resize(inputs[0], inputs[1], inputs[2],
+                                       crop_size, layout, method,
+                                       extrapolation_value, out_dtype)]
+
+reg.register_injective_schedule("image.crop_and_resize")
+
+
+# dilation2d
+reg.register_strategy("image.dilation2d", strategy.dilation2d_strategy)
+reg.register_pattern("image.dilation2d", OpPattern.OUT_ELEMWISE_FUSABLE)

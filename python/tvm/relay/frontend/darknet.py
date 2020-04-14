@@ -19,13 +19,14 @@
 DarkNet symbol frontend for Relay.
 """
 
-from __future__ import absolute_import as _abs
 from enum import Enum
 import numpy as np
 import tvm
+from tvm.ir import IRModule
+
 from .. import analysis
 from .. import expr as _expr
-from .. import module as _module
+from .. import function as _function
 from .common import get_relay_op, new_var
 
 __all__ = ['from_darknet']
@@ -129,7 +130,7 @@ def _darknet_shortcut(inputs, params, attrs, prefix):
 
     if input_0_size > input_1_size:
         scale = int(input_0_size/input_1_size)
-        input_1 = get_relay_op('upsampling')(input_1, scale=scale)
+        input_1 = get_relay_op('upsampling')(input_1, scale_h=scale, scale_w=scale)
 
     elif input_0_size < input_1_size:
         stride = int(input_1_size/input_0_size)
@@ -196,7 +197,8 @@ def _darknet_reshape(inputs, params, attrs, prefix):
 def _darknet_upsampling(inputs, params, attrs, prefix):
     """Process the upsampling operation."""
     new_attrs = {}
-    new_attrs['scale'] = attrs.get('scale', 1)
+    new_attrs['scale_h'] = attrs.get('scale', 1)
+    new_attrs['scale_w'] = attrs.get('scale', 1)
     return get_relay_op('upsampling')(*inputs, **new_attrs)
 
 def _darknet_l2normalize(inputs, params, attrs, prefix):
@@ -458,11 +460,11 @@ class GraphProto(object):
         if layer.nweights == 0:
             return None
 
-        if (layer.n * layer.c * layer.size * layer.size) != layer.nweights:
+        if (layer.n * layer.c // layer.groups * layer.size * layer.size) != layer.nweights:
             raise RuntimeError("layer weights size not matching with n c h w")
 
         params = {}
-        shape = (layer.n, layer.c, layer.size, layer.size)
+        shape = (layer.n, layer.c // layer.groups, layer.size, layer.size)
         weights = self._read_memory_buffer(shape, layer.weights)
 
         biases = self._read_memory_buffer((layer.n, ), layer.biases)
@@ -820,8 +822,8 @@ class GraphProto(object):
 
         outputs = _as_list(sym) + self._outs
         outputs = outputs[0] if len(outputs) == 1 else _expr.Tuple(outputs)
-        sym = _expr.Function(analysis.free_vars(outputs), outputs)
-        return _module.Module.from_expr(sym), self._tvmparams
+        sym = _function.Function(analysis.free_vars(outputs), outputs)
+        return IRModule.from_expr(sym), self._tvmparams
 
 def from_darknet(net,
                  shape=None,
@@ -839,10 +841,10 @@ def from_darknet(net,
 
     Returns
     -------
-    mod : tvm.relay.Module
+    mod : tvm.IRModule
         The relay module for compilation.
 
-    params : dict of str to tvm.NDArray
+    params : dict of str to tvm.nd.NDArray
         The parameter dict to be used by relay
     """
 

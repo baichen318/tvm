@@ -18,7 +18,6 @@
  */
 
 /*!
- *  Copyright (c) 2018 by Contributors
  * \file threading_backend.cc
  * \brief Native threading backend
  */
@@ -133,22 +132,51 @@ class ThreadGroup::Impl {
           sizeof(cpu_set_t), &cpuset);
 #endif
     }
-    if (exclude_worker0) {  // bind the master thread to core 0
-      cpu_set_t cpuset;
-      CPU_ZERO(&cpuset);
-      if (reverse) {
-        CPU_SET(sorted_order_[sorted_order_.size() - 1], &cpuset);
-      } else {
-        CPU_SET(sorted_order_[0], &cpuset);
-      }
-#if defined(__ANDROID__)
-      sched_setaffinity(pthread_self(),
-        sizeof(cpu_set_t), &cpuset);
-#else
-      pthread_setaffinity_np(pthread_self(),
-        sizeof(cpu_set_t), &cpuset);
-#endif
+    if (exclude_worker0) {  // master thread run task
+      // Master thread will have free migration on needed cores.
+      // Typically, the OS will schedule the master thread to run at core 0,
+      // which is idle, when other workers are running.
+      // See the comment inside SetMasterThreadFullCpuAffinity function to get more detail.
+      SetMasterThreadFullCpuAffinity(reverse);
     }
+#endif
+  }
+
+  void SetMasterThreadFullCpuAffinity(bool reverse) {
+#if defined(__linux__) || defined(__ANDROID__)
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    // For example, we have 2xA72 + 4xA53 (id is 0 - 5, 4, 5 is A72 big core)
+    // And we use config_threadpool API to set we will only use 4xA53.
+    // The sorted_order will be [4, 5, 0, 1, 2, 3].
+    // When to call this API, we have spawn threads on little cores for other workers
+    // in SetAffinity function. And for tvm master thread, it should also run on little cores,
+    // not big cores (4, 5).
+
+    // Note: this works well on x86 too. Because x86 doesn't have BIG.LITTLE,
+    // our implementation will use kBig mode by default and will let master thread
+    // run on intended cores.
+    if (reverse) {
+      for (int i = 0; i < little_count_; ++i) {
+        CPU_SET(sorted_order_[sorted_order_.size() - i - 1], &cpuset);
+      }
+    } else {
+      int big_count = big_count_;
+      // Imagine our x86 has cores 0 - 7
+      // physical cores are 0 - 3, logical cores are 4 - 7, big_count_ is 8
+      // we wish we run on physical cores, not logical cores to avoid contention issue.
+#if defined(_M_X64) || defined(__x86_64__)
+      big_count /= 2;  // ignore hyper-threading
+#endif
+      for (int i = 0; i < big_count; ++i) {
+        CPU_SET(sorted_order_[i], &cpuset);
+      }
+    }
+#if defined(__ANDROID__)
+    sched_setaffinity(pthread_self(), sizeof(cpu_set_t), &cpuset);
+#else
+    pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+#endif
 #endif
   }
 
