@@ -556,14 +556,59 @@ llvm::Value* CodeGenLLVM::CreateCast(DataType from, DataType to, llvm::Value* va
   if (value->getType() == target) return value;
   if (to.is_handle()) {
     return builder_->CreateBitCast(value, target);
-  } else if (to.is_uint() && to.bits() == 1) {
-    if (from.is_float()) {
-      llvm::Constant* zero = llvm::ConstantFP::get(LLVMType(from), 0.);
-      return builder_->CreateFCmpONE(value, zero);
+  } else if ((from.is_fixed() || from.is_ufixed()) && (to.is_fixed() || to.is_ufixed())) {
+    if (from.bits() > to.bits()) {
+      int diff = from.fracs() - to.fracs();
+      if (diff < 0) {
+        llvm::Value* ldiff = llvm::ConstantInt::get(LLVMType(to), -diff);
+        llvm::Value* trunc = builder_->CreateTruncOrBitCast(value, target);
+        return builder_->CreateShl(trunc, ldiff);
+      } else if (diff > 0) {
+        llvm::Value* ldiff = llvm::ConstantInt::get(LLVMType(from), diff);
+        llvm::Value* sr;
+        if (to.is_ufixed())
+          sr = builder_->CreateLShr(value, ldiff);
+        else
+          sr = builder_->CreateAShr(value, ldiff);
+        llvm::Value* ret = builder_->CreateTruncOrBitCast(sr, target);
+        return ret;
+      } else {
+        return builder_->CreateTruncOrBitCast(value, target);
+      }
     } else {
-      llvm::Constant* zero = llvm::ConstantInt::get(LLVMType(from), 0);
-      return builder_->CreateICmpNE(value, zero);
+      llvm::Value* ext;
+      if (from.is_ufixed())
+        ext = builder_->CreateZExtOrBitCast(value, target);
+      else
+        ext = builder_->CreateSExtOrBitCast(value, target);
+      int diff = to.fracs() - from.fracs();
+      if (diff < 0) {
+        llvm::Value* ldiff = llvm::ConstantInt::get(LLVMType(to), -diff);
+        return builder_->CreateShl(ext, ldiff);
+      } else if (diff > 0) {
+        llvm::Value* ldiff = llvm::ConstantInt::get(LLVMType(to), diff);
+        return builder_->CreateShl(ext, ldiff);
+      } else
+        return ext;
     }
+  } else if ((from.is_fixed() || from.is_ufixed()) && to.is_float()) {
+    // TODO: remove shift and become llvm inst
+    llvm::Value* fp;
+    if (from.is_fixed())
+      fp = builder_->CreateSIToFP(value, target);
+    else
+      fp = builder_->CreateUIToFP(value, target);
+    llvm::Value* div = llvm::ConstantFP::get(target, 1ULL << from.fracs());
+    return builder_->CreateFDiv(fp, div);
+  } else if (from.is_float() && (to.is_fixed() || to.is_ufixed())) {
+    llvm::Value* shl_fp = llvm::ConstantFP::get(LLVMType(from), 1ULL << to.fracs());
+    llvm::Value* shl = builder_->CreateFMul(value, shl_fp);
+    llvm::Value* shl_cast;
+    if (to.is_fixed())
+      shl_cast = builder_->CreateFPToSI(shl, target);
+    else
+      shl_cast = builder_->CreateFPToUI(shl, target);
+    return shl_cast;
   } else if (!from.is_float() && !to.is_float()) {
     return builder_->CreateIntCast(value, target, from.is_int());
   } else if (from.is_float() && to.is_int()) {
@@ -664,7 +709,13 @@ llvm::Value* CodeGenLLVM::CreateIntrinsic(const CallNode* op) {
     std::vector<llvm::Value*> arg_value;
     std::vector<llvm::Type*> sig_type;
     for (size_t i = 2; i < op->args.size(); ++i) {
-      arg_value.push_back(MakeValue(op->args[i]));
+      llvm::Value* arg = MakeValue(op->args[i]);
+      if (id == llvm::Intrinsic::pow ||
+          id == llvm::Intrinsic::sqrt ||
+          id == llvm::Intrinsic::log) {
+          arg = CreateCast(op->dtype, DataType::Float(64), arg);
+      }
+      arg_value.push_back(arg);
       if (i - 2 < static_cast<size_t>(num_signature)) {
         sig_type.push_back(arg_value.back()->getType());
       }
@@ -675,22 +726,49 @@ llvm::Value* CodeGenLLVM::CreateIntrinsic(const CallNode* op) {
     }
     llvm::Function* f = llvm::Intrinsic::getDeclaration(
         module_.get(), id, sig_type);
-    return builder_->CreateCall(f, arg_value);
+    llvm::Value* call = builder_->CreateCall(f, arg_value);
+    return CreateCast(DataType::Float(64), op->dtype, call);
   } else if (op->is_intrinsic(CallNode::bitwise_and)) {
-    return builder_->CreateAnd(MakeValue(op->args[0]), MakeValue(op->args[1]));
+    llvm::Value* a = MakeValue(op->args[0]);
+    llvm::Value* b = MakeValue(op->args[1]);
+    DataType ta = op->args[0].dtype();
+    DataType tb = op->args[1].dtype();
+    DataType t = DataType(ta.code(), ta.bits(), ta.lanes(), 0);
+    return builder_->CreateAnd(a, CreateCast(tb, t, b));
   } else if (op->is_intrinsic(CallNode::bitwise_or)) {
-    return builder_->CreateOr(MakeValue(op->args[0]), MakeValue(op->args[1]));
+    llvm::Value* a = MakeValue(op->args[0]);
+    llvm::Value* b = MakeValue(op->args[1]);
+    DataType ta = op->args[0].dtype();
+    DataType tb = op->args[1].dtype();
+    DataType t = DataType(ta.code(), ta.bits(), ta.lanes(), 0);
+    return builder_->CreateOr(a, CreateCast(tb, t, b));
   } else if (op->is_intrinsic(CallNode::bitwise_not)) {
     return builder_->CreateNot(MakeValue(op->args[0]));
   } else if (op->is_intrinsic(CallNode::bitwise_xor)) {
-    return builder_->CreateXor(MakeValue(op->args[0]), MakeValue(op->args[1]));
+    llvm::Value* a = MakeValue(op->args[0]);
+    llvm::Value* b = MakeValue(op->args[1]);
+    DataType ta = op->args[0].dtype();
+    DataType tb = op->args[1].dtype();
+    DataType t = DataType(ta.code(), ta.bits(), ta.lanes(), 0);
+    return builder_->CreateXor(a, CreateCast(tb, t, b));
   } else if (op->is_intrinsic(CallNode::shift_left)) {
-    return builder_->CreateShl(MakeValue(op->args[0]), MakeValue(op->args[1]));
+    llvm::Value* a = MakeValue(op->args[0]);
+    llvm::Value* b = MakeValue(op->args[1]);
+    DataType ta = op->args[0].dtype();
+    DataType tb = op->args[1].dtype();
+    DataType t = DataType(ta.code(), ta.bits(), ta.lanes(), 0);
+    return builder_->CreateShl(a, CreateCast(tb, t, b));
   } else if (op->is_intrinsic(CallNode::shift_right)) {
-    if (op->args[0].dtype().is_int()) {
-      return builder_->CreateAShr(MakeValue(op->args[0]), MakeValue(op->args[1]));
+    llvm::Value* a = MakeValue(op->args[0]);
+    llvm::Value* b = MakeValue(op->args[1]);
+    DataType ta = op->args[0].dtype();
+    DataType tb = op->args[1].dtype();
+    DataType t = DataType(ta.code(), ta.bits(), ta.lanes(), 0);
+    llvm::Value* b_new = CreateCast(tb, t, b);
+    if (op->args[0].dtype().is_fixed()) {
+      return builder_->CreateAShr(a, b_new);
     } else {
-      return builder_->CreateLShr(MakeValue(op->args[0]), MakeValue(op->args[1]));
+      return builder_->CreateLShr(a, b_new);
     }
   } else if (op->is_intrinsic(intrinsic::tvm_storage_sync)) {
     return CreateStorageSync(op);
@@ -1034,6 +1112,99 @@ llvm::Value* CodeGenLLVM::VisitExpr_(const ShuffleNode* op) {
   llvm::Value* mask = llvm::ConstantDataVector::get(builder_->getContext(), idx);
   auto res = builder_->CreateShuffleVector(v0, llvm::UndefValue::get(v0->getType()), mask);
   return res;
+}
+
+llvm::Value* CodeGenLLVM::VisitExpr_(const GetBitNode* op) {
+  llvm::Value* a = MakeValue(op->a);
+  llvm::Value* index = MakeValue(op->index);
+  llvm::Type* t = LLVMType(op->a.dtype());
+
+  llvm::Value* ret = builder_->CreateLShr(a, CreateCast(op->index.dtype(), op->a.dtype(), index));
+  return builder_->CreateAnd(ret, llvm::ConstantInt::get(t, 1));
+}
+
+llvm::Value* CodeGenLLVM::VisitExpr_(const GetSliceNode* op) {
+  llvm::Value* a = MakeValue(op->a);
+  llvm::Value* index_left = MakeValue(op->index_left);
+  llvm::Value* index_right = MakeValue(op->index_right);
+  DataType ta = op->a.dtype();
+  DataType tl = op->index_left.dtype();
+  DataType tr = op->index_right.dtype();
+  DataType tc = ta.with_fracs(0);
+
+  llvm::Type* t = LLVMType(op->a.dtype());
+
+  llvm::Value* t_bits = llvm::ConstantInt::get(t, ta.bits());
+  llvm::Value* bit_diff = builder_->CreateSub(CreateCast(tl, tc, index_left), CreateCast(tr, tc, index_right));
+  llvm::Value* shift_bits_right = builder_->CreateSub(t_bits, bit_diff);
+
+  llvm::Value* mask1s = builder_->CreateNot(llvm::ConstantInt::get(t, 0));
+  llvm::Value* mask_right = builder_->CreateLShr(mask1s, shift_bits_right);
+  llvm::Value* mask = builder_->CreateShl(mask_right, CreateCast(tr, tc, index_right));
+
+  llvm::Value* bits_shifted = builder_->CreateAnd(a, mask);
+
+  return builder_->CreateLShr(bits_shifted, CreateCast(tr, tc, index_right));
+}
+
+llvm::Value* CodeGenLLVM::VisitExpr_(const SetBitNode* op) {
+  llvm::Value* a = MakeValue(op->a);
+  llvm::Value* index = MakeValue(op->index);
+  llvm::Value* value = MakeValue(op->value);
+  DataType ta = op->a.dtype();
+  DataType ti = op->index.dtype();
+  DataType tv = op->value.dtype();
+
+  llvm::Type* t = LLVMType(op->a.dtype());
+
+  llvm::Value* mask1 = builder_->CreateShl(llvm::ConstantInt::get(t, 1), CreateCast(ti, ta, index));
+  llvm::Value* mask2 = builder_->CreateNot(mask1);
+
+  llvm::Value* set_bit_0 = builder_->CreateAnd(mask2, a);
+  llvm::Value* set_bit_mask = builder_->CreateShl(CreateCast(tv, ta, value), CreateCast(ti, ta, index));
+
+  return builder_->CreateOr(set_bit_0, set_bit_mask);
+}
+
+llvm::Value* CodeGenLLVM::VisitExpr_(const SetSliceNode* op) {
+  llvm::Value* a = MakeValue(op->a);
+  llvm::Value* index_left = MakeValue(op->index_left);
+  llvm::Value* index_right = MakeValue(op->index_right);
+  llvm::Value* value = MakeValue(op->value);
+  DataType ta = op->a.dtype();
+  DataType tl = op->index_left.dtype();
+  DataType tr = op->index_right.dtype();
+  DataType tv = op->value.dtype();
+  DataType tc = ta.with_fracs(0);
+
+  llvm::Type* t = LLVMType(op->a.dtype());
+
+  llvm::Value* t_bits = llvm::ConstantInt::get(t, ta.bits());
+  llvm::Value* bit_diff = builder_->CreateSub(CreateCast(tl, tc, index_left), CreateCast(tr, tc, index_right));
+  llvm::Value* shift_bits_right = builder_->CreateSub(t_bits, bit_diff);
+
+  llvm::Value* mask1s = builder_->CreateNot(llvm::ConstantInt::get(t, 0));
+  llvm::Value* mask_right = builder_->CreateLShr(mask1s, shift_bits_right);
+  llvm::Value* mask_not = builder_->CreateShl(mask_right, CreateCast(tr, tc, index_right));
+  llvm::Value* mask = builder_->CreateNot(mask_not);
+
+  llvm::Value* set_bits_0 = builder_->CreateAnd(a, mask);
+  llvm::Value* set_bits_part = builder_->CreateShl(CreateCast(tv, tc, value), CreateCast(tr, tc, index_right));
+
+  return builder_->CreateOr(set_bits_0, set_bits_part);
+}
+
+llvm::Value* CodeGenLLVM::VisitExpr_(const QuantizeNode* op) {
+  llvm::Value* body = MakeValue(op->body);
+  llvm::Value* bitwidth = MakeValue(op->bitwidth);
+  DataType t = op->dtype;
+
+  llvm::Value* bits = ConstInt32(t.bits());
+  llvm::Value* shift = CreateCast(DataType::Int(32), t, builder_ -> CreateSub(bits, bitwidth));
+  llvm::Value* ret = builder_ -> CreateShl(body, shift);
+
+  if (t.is_uint()) return builder_ -> CreateLShr(ret, shift);
+  else return builder_ -> CreateAShr(ret, shift);
 }
 
 llvm::Value* CodeGenLLVM::VisitExpr_(const BroadcastNode* op) {

@@ -30,6 +30,25 @@
 
 namespace tvm {
 namespace runtime {
+/*! \brief Add the support for mixed-bits. */
+enum QuanMode {
+  RND,
+  RND_ZERO,
+  RND_MIN_INF,
+  RND_INF,
+  RND_CONV,
+  TRN,
+  TRN_ZERO
+};
+/*! \brief Add the support for overflow mode. */
+enum OverMode {
+  SAT,
+  SAT_ZERO,
+  SAT_SYM,
+  WRAP,
+  WRAP_SM
+};
+
 /*!
  * \brief Runtime primitive data type.
  *
@@ -45,25 +64,35 @@ class DataType {
     kFloat = kDLFloat,
     kHandle = TVMTypeCode::kTVMOpaqueHandle,
   };
+  /*! \brief Default constructor initializes
+   *         everything to predictable-but-unlikely values
+   */
   /*! \brief default constructor */
-  DataType() {}
+  DataType() : qmode(RND), omode(SAT) {}
   /*!
    * \brief Constructor
    * \param dtype The DLDataType
    */
   explicit DataType(DLDataType dtype)
-      : data_(dtype) {}
+      : data_(dtype), qmode(RND), omode(SAT) {}
   /*!
    * \brief Constructor
    * \param code The type code.
    * \param bits The number of bits in the type.
    * \param lanes The number of lanes.
    */
-  DataType(int code, int bits, int lanes) {
+  DataType(int code, int bits, int lanes,
+    int fracs = 0, QuanMode qmode = RND,
+    OverMode omode = SAT) {
     data_.code = static_cast<uint8_t>(code);
     data_.bits = static_cast<uint8_t>(bits);
     data_.lanes = static_cast<uint16_t>(lanes);
+    data_.fracs = static_cast<uint8_t>(fracs);
+    qmode = qmode;
+    omode = omode;
   }
+  /** \brief trivial copy constructor. */
+  DataType(const DataType &that) = default;
   /*! \return The type code. */
   int code() const {
     return static_cast<int>(data_.code);
@@ -75,6 +104,10 @@ class DataType {
   /*! \return number of bytes to store each scalar. */
   int bytes() const {
     return (bits() + 7) / 8;
+  }
+  /*! \return the fractional bit size of a single element of this type. */
+  int fracs() const {
+    return static_cast<int>(data_.fracs);
   }
   /*! \return number of lanes in the data. */
   int lanes() const {
@@ -104,6 +137,14 @@ class DataType {
   bool is_uint() const {
     return code() == DataType::kUInt;
   }
+  /** Is this type an signed fixed-point type? */
+  bool is_fixed() const {
+    return code() == kDLInt && fracs() >= 0;
+  }
+  /** Is this type an unsigned fixed-point type? */
+  bool is_ufixed() const {
+    return code() == kDLUInt && fracs() >= 0;
+  }
   /*! \return whether type is a handle type. */
   bool is_handle() const {
     return code() == DataType::kHandle;
@@ -112,13 +153,21 @@ class DataType {
   bool is_vector() const {
     return lanes() > 1;
   }
+  /*! \return DataType with same number of bits and lanes,
+   * but new_code for a type code.
+   */
+  DataType with_code(int new_code) const {
+      return DataType(new_code, bits(), lanes(),
+        fracs(), qmode, omode);
+  }
   /*!
    * \brief Create a new data type by change lanes to a specified value.
    * \param lanes The target number of lanes.
    * \return the result type.
    */
   DataType with_lanes(int lanes) const {
-    return DataType(data_.code, data_.bits, lanes);
+    return DataType(data_.code, data_.bits, lanes,
+      fracs(), qmode, omode);
   }
   /*!
    * \brief Create a new data type by change bits to a specified value.
@@ -126,7 +175,15 @@ class DataType {
    * \return the result type.
    */
   DataType with_bits(int bits) const {
-    return DataType(data_.code, bits, data_.lanes);
+    return DataType(data_.code, bits, data_.lanes,
+      fracs(), qmode, omode);
+  }
+  /*! \return DataType with same type code and lanes, but new_fracs for
+   *  the number of fracs  bits.
+   */
+  DataType with_fracs(int new_fracs) const {
+      return DataType(data_.code, data_.bits, data_.lanes,
+        new_fracs, qmode, omode);
   }
   /*!
    * \brief Get the scalar version of the type.
@@ -144,7 +201,9 @@ class DataType {
     return
         data_.code == other.data_.code &&
         data_.bits == other.data_.bits &&
-        data_.lanes == other.data_.lanes;
+        data_.lanes == other.data_.lanes &&
+        qmode == other.qmode &&
+        omode == other.omode;
   }
   /*!
    * \brief NotEqual comparator.
@@ -206,6 +265,18 @@ class DataType {
   static DataType Handle(int bits = 64, int lanes = 1) {
     return DataType(kHandle, bits, lanes);
   }
+  /** Constructing a signed fixed-point type */
+  inline DataType Fixed(int bits, int fracs, int lanes = 1,
+    QuanMode qmode = RND, OverMode omode = SAT) {
+      return DataType(kDLInt, bits, lanes, fracs,
+        qmode, omode);
+  }
+  /** Constructing a unsigned fixed-point type */
+  inline DataType UFixed(int bits, int fracs, int lanes = 1,
+    QuanMode qmode = RND, OverMode omode = SAT) {
+      return DataType(kDLUInt, bits, lanes, fracs,
+        qmode, omode);
+  }
   /*!
    * \brief Get the corresponding type of TVMShapeIndex.
    * \return The type of TVM shape index.
@@ -220,6 +291,10 @@ class DataType {
 
  private:
   DLDataType data_;
+  /*! \brief Add the support for mixed-bits. */
+  QuanMode qmode;
+  /*! \brief Add the support for overflow mode. */
+  OverMode omode;
 };
 
 /*!

@@ -859,6 +859,102 @@ class ShuffleNode : public PrimExprNode {
   TVM_DECLARE_FINAL_OBJECT_INFO(ShuffleNode, PrimExprNode);
 };
 
+/*
+ * \brief GetBit instruction.
+ * Get a single bit from a given expression with the given index
+ */
+class GetBitNode : public PrimExprNode {
+ public:
+  PrimExpr a, index;
+
+  void VisitAttrs(AttrVisitor* v) {
+    v -> Visit("a", &a);
+    v -> Visit("index", &index);
+  }
+
+  TVM_DLL static PrimExpr make(PrimExpr a, PrimExpr index);
+
+  static constexpr const char* _type_key = "GetBit";
+  TVM_DECLARE_FINAL_OBJECT_INFO(GetBitNode, PrimExprNode);
+};
+
+/*
+ * \brief GetSlice instruction.
+ * Get a slice of bits from a given expression with the given range.
+ */
+class GetSliceNode : public PrimExprNode {
+ public:
+  PrimExpr a, index_left, index_right;
+
+  void VisitAttrs(AttrVisitor* v) {
+    v -> Visit("a", &a);
+    v -> Visit("index_left", &index_left);
+    v -> Visit("index_right", &index_right);
+  }
+
+  TVM_DLL static PrimExpr make(PrimExpr a, PrimExpr index_left, PrimExpr index_right);
+
+  static constexpr const char* _type_key = "GetSlice";
+  TVM_DECLARE_FINAL_OBJECT_INFO(GetSliceNode, PrimExprNode);
+};
+
+/*
+ * \brief SetBit instruction.
+ * Set a single bit to a given expression with the given index.
+ */
+class SetBitNode : public PrimExprNode {
+ public:
+  PrimExpr a, value, index;
+
+  TVM_DLL static PrimExpr make(PrimExpr a, PrimExpr value, PrimExpr index);
+
+  void VisitAttrs(AttrVisitor* v) {
+    v -> Visit("a", &a);
+    v -> Visit("value", &value);
+    v -> Visit("index", &index);
+  }
+  static constexpr const char* _type_key = "SetBit";
+  TVM_DECLARE_FINAL_OBJECT_INFO(SetBitNode, PrimExprNode);
+};
+
+/*
+ * \brief SetSlice instruction.
+ * Set a slice of bits to the given expression with the given range.
+ */
+class SetSliceNode : public PrimExprNode {
+ public:
+  PrimExpr a, value, index_left, index_right;
+
+  TVM_DLL static PrimExpr make(PrimExpr a, PrimExpr value, PrimExpr index_left, PrimExpr index_right);
+
+  void VisitAttrs(AttrVisitor* v) {
+    v -> Visit("index_left", &index_left);
+    v -> Visit("index_right", &index_right);
+    v -> Visit("a", &a);
+    v -> Visit("value", &value);
+  }
+  static constexpr const char* _type_key = "SetSlice";
+  TVM_DECLARE_FINAL_OBJECT_INFO(SetSliceNode, PrimExprNode);
+};
+
+/*
+ * \brief Quantize instruction.
+ * Quantize an expression to a certain bitwidth. TODO: fix this
+ */
+class QuantizeNode : public PrimExprNode {
+ public:
+  PrimExpr body, bitwidth;
+
+  TVM_DLL static PrimExpr make(PrimExpr body, PrimExpr bitwidth);
+
+  void VisitAttrs(AttrVisitor* v) {
+    v -> Visit("body", &body);
+    v -> Visit("bitwidth", &bitwidth);
+  }
+  static constexpr const char* _type_key = "Quantize";
+  TVM_DECLARE_FINAL_OBJECT_INFO(QuantizeNode, PrimExprNode);
+};
+
 // Reduce operator
 class CommReducerNode;
 

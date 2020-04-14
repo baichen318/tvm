@@ -134,6 +134,11 @@ class CodeGenLLVM :
   llvm::Value* VisitExpr_(const CallNode* op) override;
   llvm::Value* VisitExpr_(const RampNode* op) override;
   llvm::Value* VisitExpr_(const ShuffleNode* op) override;
+  llvm::Value* VisitExpr_(const GetBitNode* op) override;
+  llvm::Value* VisitExpr_(const GetSliceNode* op) override;
+  llvm::Value* VisitExpr_(const SetBitNode* op) override;
+  llvm::Value* VisitExpr_(const SetSliceNode* op) override;
+  llvm::Value* VisitExpr_(const QuantizeNode* op) override;
   llvm::Value* VisitExpr_(const BroadcastNode* op) override;
   // stmt
   void VisitStmt_(const StoreNode* op) override;

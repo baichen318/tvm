@@ -148,6 +148,11 @@ class ExprFunctor<R(const PrimExpr& n, Args...)> {
   virtual R VisitExpr_(const RampNode* op, Args... args) EXPR_FUNCTOR_DEFAULT;
   virtual R VisitExpr_(const BroadcastNode* op, Args... args) EXPR_FUNCTOR_DEFAULT;
   virtual R VisitExpr_(const ShuffleNode* op, Args... args) EXPR_FUNCTOR_DEFAULT;
+  virtual R VisitExpr_(const GetBitNode* op, Args... args) EXPR_FUNCTOR_DEFAULT;
+  virtual R VisitExpr_(const GetSliceNode* op, Args... args) EXPR_FUNCTOR_DEFAULT;
+  virtual R VisitExpr_(const SetBitNode* op, Args... args) EXPR_FUNCTOR_DEFAULT;
+  virtual R VisitExpr_(const SetSliceNode* op, Args... args) EXPR_FUNCTOR_DEFAULT;
+  virtual R VisitExpr_(const QuantizeNode* op, Args... args) EXPR_FUNCTOR_DEFAULT;
   virtual R VisitExpr_(const IntImmNode* op, Args... args) EXPR_FUNCTOR_DEFAULT;
   virtual R VisitExpr_(const FloatImmNode* op, Args... args) EXPR_FUNCTOR_DEFAULT;
   virtual R VisitExpr_(const StringImmNode* op, Args... args) EXPR_FUNCTOR_DEFAULT;
@@ -189,6 +194,11 @@ class ExprFunctor<R(const PrimExpr& n, Args...)> {
     IR_EXPR_FUNCTOR_DISPATCH(SelectNode);
     IR_EXPR_FUNCTOR_DISPATCH(RampNode);
     IR_EXPR_FUNCTOR_DISPATCH(ShuffleNode);
+    IR_EXPR_FUNCTOR_DISPATCH(GetBitNode);
+    IR_EXPR_FUNCTOR_DISPATCH(GetSliceNode);
+    IR_EXPR_FUNCTOR_DISPATCH(SetBitNode);
+    IR_EXPR_FUNCTOR_DISPATCH(SetSliceNode);
+    IR_EXPR_FUNCTOR_DISPATCH(QuantizeNode);
     IR_EXPR_FUNCTOR_DISPATCH(BroadcastNode);
     IR_EXPR_FUNCTOR_DISPATCH(IntImmNode);
     IR_EXPR_FUNCTOR_DISPATCH(FloatImmNode);
@@ -240,6 +250,11 @@ class TVM_DLL ExprVisitor :
   void VisitExpr_(const RampNode* op) override;
   void VisitExpr_(const BroadcastNode* op) override;
   void VisitExpr_(const ShuffleNode* op) override;
+  void VisitExpr_(const GetBitNode* op) override;
+  void VisitExpr_(const GetSliceNode* op) override;
+  void VisitExpr_(const SetBitNode* op) override;
+  void VisitExpr_(const SetSliceNode* op) override;
+  void VisitExpr_(const QuantizeNode* op) override;
   void VisitExpr_(const IntImmNode* op) override;
   void VisitExpr_(const FloatImmNode* op) override;
   void VisitExpr_(const StringImmNode* op) override;
@@ -285,6 +300,11 @@ class TVM_DLL ExprMutator :
   PrimExpr VisitExpr_(const RampNode* op) override;
   PrimExpr VisitExpr_(const BroadcastNode* op) override;
   PrimExpr VisitExpr_(const ShuffleNode* op) override;
+  PrimExpr VisitExpr_(const GetBitNode* op) override;
+  PrimExpr VisitExpr_(const GetSliceNode* op) override;
+  PrimExpr VisitExpr_(const SetBitNode* op) override;
+  PrimExpr VisitExpr_(const SetSliceNode* op) override;
+  PrimExpr VisitExpr_(const QuantizeNode* op) override;
   PrimExpr VisitExpr_(const IntImmNode* op) override;
   PrimExpr VisitExpr_(const FloatImmNode* op) override;
   PrimExpr VisitExpr_(const StringImmNode* op) override;

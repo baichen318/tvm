@@ -309,6 +309,66 @@ PrimExpr ShuffleNode::make_extract_element(PrimExpr vector, int index) {
   return make({vector}, {Integer(index)});
 }
 
+PrimExpr GetBitNode::make(PrimExpr a, PrimExpr index) {
+  CHECK(a.defined()) << "GetBitNode of undefined target\n";
+  CHECK(index.defined()) << "GetBitNode of undefined index\n";
+  ObjectPtr<GetBitNode> node = make_object<GetBitNode>();
+  node->dtype = a.dtype();
+  node->a = std::move(a);
+  node->index = std::move(index);
+  return PrimExpr(node);
+}
+
+
+PrimExpr GetSliceNode::make(PrimExpr a, PrimExpr index_left, PrimExpr index_right) {
+  CHECK(a.defined()) << "GetSliceNode of undefined target\n";
+  CHECK(index_left.defined()) << "GetSliceNode of undefined left index\n";
+  CHECK(index_right.defined()) << "GetSliceNode of undefined right index\n";
+  ObjectPtr<GetSliceNode> node = make_object<GetSliceNode>();
+  node->dtype = a.dtype();
+  node->a = std::move(a);
+  node->index_left = std::move(index_left);
+  node->index_right = std::move(index_right);
+  return PrimExpr(node);
+}
+
+
+PrimExpr SetBitNode::make(PrimExpr a, PrimExpr value, PrimExpr index) {
+  CHECK(a.defined()) << "SetBitNode of undefined target\n";
+  CHECK(value.defined()) << "SetBitNode of undefined value\n";
+  CHECK(index.defined()) << "SetBitNode of undefined index\n";
+  ObjectPtr<SetBitNode> node = make_object<SetBitNode>();
+  node->dtype = a.dtype();
+  node->a = std::move(a);
+  node->value = std::move(value);
+  node->index = std::move(index);
+  return PrimExpr(node);
+}
+
+PrimExpr SetSliceNode::make(PrimExpr a, PrimExpr value, PrimExpr index_left, PrimExpr index_right) {
+  CHECK(a.defined()) << "SetSliceNode of undefined target\n";
+  CHECK(value.defined()) << "SetSliceNode of undefined value\n";
+  CHECK(index_left.defined()) << "SetSliceNode of undefined left index\n";
+  CHECK(index_right.defined()) << "SetSliceNode of undefined right index\n";
+  ObjectPtr<SetSliceNode> node = make_object<SetSliceNode>();
+  node->dtype = a.dtype();
+  node->a = std::move(a);
+  node->value = std::move(value);
+  node->index_left = std::move(index_left);
+  node->index_right = std::move(index_right);
+  return PrimExpr(node);
+}
+
+PrimExpr QuantizeNode::make(PrimExpr body, PrimExpr bitwidth) {
+  CHECK(body.defined()) << "QuantizeNode of undefined body\n";
+  CHECK(bitwidth.defined()) << "QuantizeNode of undefined bitwidth\n";
+  ObjectPtr<QuantizeNode> node = make_object<QuantizeNode>();
+  node->dtype = body.dtype();
+  node->body = std::move(body);
+  node->bitwidth = std::move(bitwidth);
+  return PrimExpr(node);
+}
+
 CommReducer CommReducerNode::make(Array<Var> lhs,
                                   Array<Var> rhs,
                                   Array<PrimExpr> result,
@@ -691,6 +751,11 @@ TVM_REGISTER_NODE_TYPE(LoadNode);
 TVM_REGISTER_NODE_TYPE(RampNode);
 TVM_REGISTER_NODE_TYPE(BroadcastNode);
 TVM_REGISTER_NODE_TYPE(ShuffleNode);
+TVM_REGISTER_NODE_TYPE(GetBitNode);
+TVM_REGISTER_NODE_TYPE(GetSliceNode);
+TVM_REGISTER_NODE_TYPE(SetBitNode);
+TVM_REGISTER_NODE_TYPE(SetSliceNode);
+TVM_REGISTER_NODE_TYPE(QuantizeNode);
 TVM_REGISTER_NODE_TYPE(CommReducerNode);
 TVM_REGISTER_NODE_TYPE(ReduceNode);
 TVM_REGISTER_NODE_TYPE(AnyNode);
@@ -764,6 +829,21 @@ TVM_REGISTER_GLOBAL("tir.Broadcast")
 
 TVM_REGISTER_GLOBAL("tir.Shuffle")
 .set_body_typed(ShuffleNode::make);
+
+TVM_REGISTER_GLOBAL("tir.GetBit")
+.set_body_typed(GetBitNode::make);
+
+TVM_REGISTER_GLOBAL("tir.GetSlice")
+.set_body_typed(GetSliceNode::make);
+
+TVM_REGISTER_GLOBAL("tir.SetBit")
+.set_body_typed(SetBitNode::make);
+
+TVM_REGISTER_GLOBAL("tir.SetSlice")
+.set_body_typed(SetSliceNode::make);
+
+TVM_REGISTER_GLOBAL("tir.Quantize")
+.set_body_typed(QuantizeNode::make);
 
 TVM_REGISTER_GLOBAL("tir.Let")
 .set_body_typed(LetNode::make);
