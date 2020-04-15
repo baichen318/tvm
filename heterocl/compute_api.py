@@ -1,14 +1,17 @@
 """Compute APIs in HeteroCL"""
 #pylint: disable=no-member, redefined-builtin, too-many-arguments, missing-docstring
 import numbers
+import tvm.tir._ffi_api as _ffi_api
+
 from collections import OrderedDict
-from tvm import expr_hcl as _expr, stmt as _stmt
+from tvm.tir import expr as _expr, stmt as _stmt
 from tvm.tir import IterVar as _IterVar
 from util import get_index, get_name, make_for, CastRemover
 from tensor import Scalar, Tensor, TensorSlice
 from schedule import Stage
 from debug import APIError
 from module import Module
+
 ##############################################################################
 # Helper classes and functions
 ##############################################################################
@@ -44,7 +47,7 @@ class ReplaceReturn(CastRemover):
         """Replace the Return statement with a Store statement
 
         """
-        return _make.Store(self.buffer_var, _make.Cast(self.dtype, node.value), self.index)
+        return _ffi_api.Store(self.buffer_var, _ffi_api.Cast(self.dtype, node.value), self.index)
 
 def process_fcompute(fcompute, shape):
     """Pre-process the fcompute field of an API.
@@ -121,9 +124,6 @@ def compute_body(name,
         stage.stmt_stack.append([])
         ret = fcompute(*var_list)
 
-        print(dir(ret))
-        print(dir(ret.a))
-        print(dir(ret.b))
         stage.lhs_tensors.add(tensor)
         for t in stage.lhs_tensors:
             t.last_update = stage
@@ -136,10 +136,10 @@ def compute_body(name,
             stmt = stage.pop_stmt()
             stmt = ReplaceReturn(buffer_var, dtype, index).mutate(stmt)
             stmt = make_for(indices, stmt, 0)
-        elif isinstance(ret, (TensorSlice, Scalar, _expr.Expr, numbers.Number)):
+        elif isinstance(ret, (TensorSlice, Scalar, _expr.PrimExpr, numbers.Number)):
             indices = lambda_ivs
             index, _, _ = get_index(shape, indices, 0)
-            stage.emit(_make.Store(buffer_var, _make.Cast(dtype, ret), index))
+            stage.emit(_ffi_api.Store(buffer_var, _ffi_api.Cast(dtype, ret), index))
             stmt = make_for(indices, stage.pop_stmt(), 0)
         elif isinstance(ret, Tensor): # reduction
             ret_ivs = [_IterVar((0, ret.shape[i]), ret.name+"_i" + str(i), 0)
@@ -157,7 +157,7 @@ def compute_body(name,
             if rid != len(ret.shape):
                 raise APIError("Incorrect number of reduction axes in lambda arguments")
             index, _, _ = get_index(shape, indices, 0)
-            st = _make.Store(buffer_var, _make.Cast(dtype, ret[tuple(ret_ivs)]), index)
+            st = _ffi_api.Store(buffer_var, _ffi_api.Cast(dtype, ret[tuple(ret_ivs)]), index)
             stage.emit(make_for(ret_ivs, st, 0))
             stmt = stage.pop_stmt()
             stage.input_stages.remove(stage)
@@ -167,7 +167,7 @@ def compute_body(name,
             raise APIError("Unknown return type of the computation rule")
         # add attributes to the loop
         if isinstance(stmt, _stmt.For):
-            stmt = _make.For(stmt.loop_var,
+            stmt = _ffi_api.For(stmt.loop_var,
                              stmt.min, stmt.extent,
                              0, 0, stmt.body,
                              list(attrs.keys()),

@@ -6,7 +6,6 @@ from ordered_set import OrderedSet
 #from .tvm import make as _make
 from tvm.tir import stmt as _stmt
 from tvm.tir.buffer import decl_buffer
-#from tvm import _api_internal
 from tvm.te._ffi_api import ExternOp as _ExternOp
 from debug import DSLError, APIError
 import util
@@ -227,6 +226,9 @@ class Stage(object):
     axis_list : list of IterVar
         A list of axes appeared in this Stage
 
+    attrs: dict(string, ObjectRef)
+        Make it compatible to TVM
+
     has_break : bool
         Set to `True` if there is a `break` statement within the stage
 
@@ -275,6 +277,7 @@ class Stage(object):
         self.stmt_stack = [[]]
         self.var_dict = {}
         self.axis_list = []
+        self.attrs = None
         self.has_break = False
         self.has_return = False
         self.ret_dtype = None
@@ -306,7 +309,7 @@ class Stage(object):
         output_bufs = [self._buf]
         body = self.pop_stmt()
         Stage._current.pop()
-        op = _ExternOp(self.name, "", self.axis_list, input_ops,
+        op = _ExternOp(self.name, "", self.attrs, input_ops,
                        input_bufs, output_bufs, body)
         self._op = op.output(0)
         # update last_update stages

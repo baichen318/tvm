@@ -1,9 +1,11 @@
 """Utility functions for HeteroCL"""
+import tvm.tir._ffi_api as _ffi_api
+import type
+import config
+
 from tvm.tir import expr as _expr
 from tvm.tir.expr import Var, Call
 from tvm.tir.buffer import decl_buffer
-import type
-import config
 from scheme import Scheme
 from debug import DTypeError
 from mutator import Mutator
@@ -76,16 +78,16 @@ def get_dtype(dtype, name=None):
     return type.dtype_to_str(dtype)
 
 def true():
-    return _make.UIntImm("uint1", 1)
+    return _ffi_api.UIntImm("uint1", 1)
 
 def make_for(indices, body, level):
         iter_var = indices[level]
         if level == len(indices) - 1:
-            body = _make.AttrStmt(iter_var, "loop_scope", iter_var.var, body)
-            return _make.For(iter_var.var, iter_var.dom.min, iter_var.dom.extent, 0, 0, body)
+            body = _ffi_api.AttrStmt(iter_var, "loop_scope", iter_var.var, body)
+            return _ffi_api.For(iter_var.var, iter_var.dom.min, iter_var.dom.extent, 0, 0, body)
         else:
-            body = _make.AttrStmt(iter_var, "loop_scope", iter_var.var, make_for(indices, body, level+1))
-            return _make.For(iter_var.var, iter_var.dom.min, iter_var.dom.extent, 0, 0, body)
+            body = _ffi_api.AttrStmt(iter_var, "loop_scope", iter_var.var, make_for(indices, body, level+1))
+            return _ffi_api.For(iter_var.var, iter_var.dom.min, iter_var.dom.extent, 0, 0, body)
 
 # return (index, bit, _)
 def get_index(shape, args, level):
@@ -97,9 +99,9 @@ def get_index(shape, args, level):
     else:
         index = get_index(shape, args, level+1)
         new_arg = args[level]
-        new_index = _make.Add(index[0],
-                _make.Mul(new_arg, index[2], False), False)
-        new_acc = _make.Mul(index[2], shape[level], False)
+        new_index = _ffi_api.Add(index[0],
+                _ffi_api.Mul(new_arg, index[2], False), False)
+        new_acc = _ffi_api.Mul(index[2], shape[level], False)
         return (new_index, index[1], new_acc)
 
 def get_type(dtype):

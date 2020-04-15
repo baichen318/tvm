@@ -5,7 +5,7 @@ from tvm.runtime.object_generic import convert
 class Mutator(object):
 
     def mutate(self, node):
-        if isinstance(node, _expr.Expr):
+        if isinstance(node, _expr.PrimExpr):
             if isinstance(node, _expr.ConstExpr):
                 return self.mutate_ConstExpr(node)
             elif isinstance(node, _expr.BinaryOpExpr):

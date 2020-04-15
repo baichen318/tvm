@@ -1,10 +1,11 @@
 """HeteroCL tensors and scalars."""
 #pylint: disable=missing-docstring, too-many-instance-attributes
-#from .tvm import make as _make
+
+import tvm.tir._ffi_api as _ffi_api
+
 from tvm.tir import expr as _expr, stmt as _stmt
 from tvm.tir.buffer import decl_buffer
-# import tvm
-# from ..python.tvm._ffi.node import NodeGeneric
+from tvm.runtime import ObjectGeneric
 from debug import TensorError
 from schedule import Stage
 import util
@@ -12,7 +13,7 @@ import debug
 import type
 from tvm.tir import _ffi_api
 
-class Scalar(NodeGeneric, _expr.ExprOp):
+class Scalar(ObjectGeneric, _expr.ExprOp):
     """A non-mutable scalar.
 
     This should be used by `heterocl.placeholder` only. Valid usages of
@@ -52,9 +53,9 @@ class Scalar(NodeGeneric, _expr.ExprOp):
 
     def __getitem__(self, indices):
         if isinstance(indices, slice):
-            return _make.GetSlice(self.var, indices.start, indices.stop)
+            return _ffi_api.GetSlice(self.var, indices.start, indices.stop)
         elif isinstance(indices, (int, _expr.Expr)):
-            return _make.GetBit(self.var, indices)
+            return _ffi_api.GetBit(self.var, indices)
         else:
             raise TensorError("Invalid index")
 
@@ -73,10 +74,10 @@ class Scalar(NodeGeneric, _expr.ExprOp):
             return self.var.same_as(var)
         return False
 
-    def asnode(self):
+    def asobject(self):
         return self.var
 
-class TensorSlice(NodeGeneric, _expr.ExprOp):
+class TensorSlice(ObjectGeneric, _expr.ExprOp):
     """A helper class for tensor operations.
 
     Valid tensor accesses include: 1. getting an element from a tensor 2. bit
@@ -135,39 +136,39 @@ class TensorSlice(NodeGeneric, _expr.ExprOp):
             raise TensorError("Cannot set tensor elements without compute APIs")
         builder = Stage.get_current()
         if bit is None:
-            builder.emit(_make.Store(self.tensor.buf.data,
-                                     _make.Cast(self.tensor.dtype, expr),
+            builder.emit(_ffi_api.Store(self.tensor.buf.data,
+                                     _ffi_api.Cast(self.tensor.dtype, expr),
                                      index))
         elif isinstance(bit, slice):
-            load = _make.Load(self.tensor.dtype, self.tensor.buf.data, index)
-            expr = _make.SetSlice(load, expr, bit.start, bit.stop)
-            builder.emit(_make.Store(self.tensor.buf.data,
-                                     _make.Cast(self.tensor.dtype, expr),
+            load = _ffi_api.Load(self.tensor.dtype, self.tensor.buf.data, index)
+            expr = _ffi_api.SetSlice(load, expr, bit.start, bit.stop)
+            builder.emit(_ffi_api.Store(self.tensor.buf.data,
+                                     _ffi_api.Cast(self.tensor.dtype, expr),
                                      index))
         else:
-            load = _make.Load(self.tensor.dtype, self.tensor.buf.data, index)
-            expr = _make.SetBit(load, expr, bit)
-            builder.emit(_make.Store(self.tensor.buf.data,
-                                     _make.Cast(self.tensor.dtype, expr),
+            load = _ffi_api.Load(self.tensor.dtype, self.tensor.buf.data, index)
+            expr = _ffi_api.SetBit(load, expr, bit)
+            builder.emit(_ffi_api.Store(self.tensor.buf.data,
+                                     _ffi_api.Cast(self.tensor.dtype, expr),
                                      index))
 
     @property
     def dtype(self):
         return self.tensor.dtype
 
-    def asnode(self):
+    def asobject(self):
         if len(self.indices) < len(self.tensor.shape):
             raise TensorError("Accessing a slice of tensor is not allowed")
         index, bit, _ = util.get_index(self.tensor.shape, self.indices, 0)
         if bit is None:
-            return _make.Load(self.tensor.dtype, self.tensor.buf.data, index)
+            return _ffi_api.Load(self.tensor.dtype, self.tensor.buf.data, index)
         elif isinstance(bit, slice):
-            return _make.GetSlice(_make.Load(self.tensor.dtype, self.tensor.buf.data, index),
+            return _ffi_api.GetSlice(_ffi_api.Load(self.tensor.dtype, self.tensor.buf.data, index),
                                   bit.start,
                                   bit.stop)
-        return _make.GetBit(_make.Load(self.tensor.dtype, self.tensor.buf.data, index), bit)
+        return _ffi_api.GetBit(_ffi_api.Load(self.tensor.dtype, self.tensor.buf.data, index), bit)
 
-class Tensor(NodeGeneric, _expr.ExprOp):
+class Tensor(ObjectGeneric, _expr.ExprOp):
     """A HeteroCL tensor.
 
     This is a wrapper for a TVM tensor. It should be generated from HeteroCL
@@ -227,7 +228,7 @@ class Tensor(NodeGeneric, _expr.ExprOp):
     heterocl.placeholder, heterocl.compute
     """
 
-    __hash__ = NodeGeneric.__hash__
+    __hash__ = ObjectGeneric.__hash__
 
     def __init__(self, shape, dtype="int32", name="tensor", buf=None):
         self._tensor = None
@@ -267,20 +268,20 @@ class Tensor(NodeGeneric, _expr.ExprOp):
                 raise TensorError("Cannot set tensor elements without compute APIs")
             builder = Stage.get_current()
             if bit is None:
-                builder.emit(_make.Store(self.buf.data,
-                                         _make.Cast(self.dtype, expr),
+                builder.emit(_ffi_api.Store(self.buf.data,
+                                         _ffi_api.Cast(self.dtype, expr),
                                          index))
             elif isinstance(bit, slice):
-                load = _make.Load(self.tensor.dtype, self.tensor.buf.data, index)
-                expr = _make.SetSlice(load, expr, bit.start, bit.stop)
-                builder.emit(_make.Store(self.tensor.buf.data,
-                                         _make.Cast(self.tensor.dtype, expr),
+                load = _ffi_api.Load(self.tensor.dtype, self.tensor.buf.data, index)
+                expr = _ffi_api.SetSlice(load, expr, bit.start, bit.stop)
+                builder.emit(_ffi_api.Store(self.tensor.buf.data,
+                                         _ffi_api.Cast(self.tensor.dtype, expr),
                                          index))
             else:
-                load = _make.Load(self.tensor.dtype, self.tensor.buf.data, index)
-                expr = _make.SetBit(load, expr, bit)
-                builder.emit(_make.Store(self.tensor.buf.data,
-                                         _make.Cast(self.tensor.dtype, expr),
+                load = _ffi_api.Load(self.tensor.dtype, self.tensor.buf.data, index)
+                expr = _ffi_api.SetBit(load, expr, bit)
+                builder.emit(_ffi_api.Store(self.tensor.buf.data,
+                                         _ffi_api.Cast(self.tensor.dtype, expr),
                                          index))
 
     @property
@@ -344,9 +345,9 @@ class Tensor(NodeGeneric, _expr.ExprOp):
         """
         self.__setitem__(0, value)
 
-    def asnode(self):
+    def asobject(self):
         if len(self.shape) == 1 and self.shape[0] == 1:
-            return TensorSlice(self, 0).asnode()
+            return TensorSlice(self, 0).asobject()
         else:
             raise ValueError("Cannot perform expression on Tensor")
 
