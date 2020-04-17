@@ -5,7 +5,7 @@ from tvm.driver.build_module import build as _build, lower as _lower
 #from .tvm.api import convert
 import tvm
 from tvm.te import _ffi_api as tvm_api
-#from .tvm import schedule as _schedule
+from tvm.te import schedule as _schedule
 #from .tvm import make as _make
 from tvm.tir.op import call_intrin
 from tensor import Scalar, Tensor
@@ -271,7 +271,7 @@ def lower(schedule):
             new_inputs.append(i.var)
     return _lower(schedule.sch, new_inputs, simple_mode=True)
 
-def build(schedule, target=None, name="default_function", stmt=None):
+def build(schedule, target=None, name="default_function"):
     """Build the executable according to the schedule and target.
 
     The default target is `llvm` (i.e., CPU execution). If stmt is specified,
@@ -301,14 +301,4 @@ def build(schedule, target=None, name="default_function", stmt=None):
             new_inputs.append(i.tensor.op.output(0))
         else:
             new_inputs.append(i.var)
-    if stmt is not None:
-        for i in schedule.inputs:
-            if isinstance(i, Tensor):
-                shapes = []
-                for s in i.shape:
-                    shapes.append(0)
-                    shapes.append(s)
-                tpl = tuple(shapes)
-                stmt = _stmt.AttrStmt([i.buf, i.tensor], "buffer_bind_scope",
-                        call_intrin('handle', 'tvm_tuple', *tpl), stmt)
-    return _build(schedule.sch, new_inputs, target=target, name=name, stmt=stmt)
+    return _build(schedule.sch, new_inputs, target=target, name=name)

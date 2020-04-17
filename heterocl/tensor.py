@@ -294,7 +294,7 @@ class Tensor(ObjectGeneric, _expr.ExprOp):
 
     @property
     def type(self):
-        return types.dtype_to_hcl(self.dtype)
+        return type.dtype_to_hcl(self.dtype)
 
     @property
     def op(self):

@@ -1,6 +1,6 @@
 """Quantization scheme."""
 #pylint: disable=missing-docstring
-import types
+import type
 from debug import APIError
 
 class Scheme(object):
@@ -77,7 +77,7 @@ class Scheme(object):
         dtype : Type
             The target data type
         """
-        if not isinstance(dtype, (types.Int, types.UInt)):
+        if not isinstance(dtype, (type.Int, type.UInt)):
             raise APIError("Downsize to non-integer type is not allowed")
         if not isinstance(inputs, list):
             inputs = [inputs]
@@ -98,7 +98,7 @@ class Scheme(object):
         dtype : Type
             The target data type
         """
-        if not isinstance(dtype, (types.Fixed, types.UFixed)):
+        if not isinstance(dtype, (type.Fixed, type.UFixed)):
             raise APIError("Quantize to integer type is not allowed")
         if not isinstance(inputs, list):
             inputs = [inputs]
