@@ -1085,7 +1085,7 @@ inline DLDataType String2DLDataType(std::string s) {
   } else if (s.substr(0, 5) == "float") {
     t.code = kDLFloat; scan = s.c_str() + 5;
   } else if (s.substr(0, 5) == "fixed") {
-    t.code = kFixed;  scan = s.c_str() + 5;
+    t.code = kFixed; scan = s.c_str() + 5;
   } else if (s.substr(0, 6) == "ufixed") {
     t.code = kUFixed; scan = s.c_str() + 6;
   } else if (s.substr(0, 6) == "handle") {
@@ -1106,6 +1106,13 @@ inline DLDataType String2DLDataType(std::string s) {
   char* xdelim;  // emulate sscanf("%ux%u", bits, lanes)
   uint8_t bits = static_cast<uint8_t>(strtoul(scan, &xdelim, 10));
   if (bits != 0) t.bits = bits;
+  if (*xdelim == '_') {
+    uint8_t fracs = static_cast<uint8_t>(strtoul(xdelim + 1, &xdelim, 10));
+    if (fracs > bits)
+      LOG(FATAL) << "fraction bits cannot be greater than total bits: " <<
+        fracs << ">" << bits;
+    t.fracs = static_cast<uint8_t>(fracs);
+  }
   char* endpt = xdelim;
   if (*xdelim == '_') {
     unsigned fracs = strtoul(xdelim + 1, &xdelim, 10);

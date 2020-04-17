@@ -311,9 +311,10 @@ inline int GetVectorBytes(DataType dtype) {
       dtype == DataType::Int(1)) {
     return 1;
   }
-  CHECK_EQ(data_bits % 8, 0U)
-      << "Need to load/store by multiple of bytes";
+  // CHECK_EQ(data_bits % 8, 0U)
+  //     << "Need to load/store by multiple of bytes";
   return data_bits / 8;
+  // return (data_bits + 7) / 8;
 }
 
 /*!
