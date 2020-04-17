@@ -159,7 +159,7 @@ def lower(sch,
     # Phase 1
     stmt = ir_pass.RewriteForTensorCore(stmt, sch, binds)
     stmt = ir_pass.StorageFlatten(stmt, binds, 64, cfg.instrument_bound_checkers)
-    stmt = ir_pass.CanonicalSimplify(stmt)
+    #stmt = ir_pass.CanonicalSimplify(stmt)
     for f in lower_phase1:
         stmt = f(stmt)
 
@@ -170,15 +170,15 @@ def lower(sch,
         stmt = ir_pass.SkipVectorize(stmt)
     else:
         stmt = ir_pass.VectorizeLoop(stmt)
-    stmt = ir_pass.InjectVirtualThread(stmt)
+    #stmt = ir_pass.InjectVirtualThread(stmt)
     stmt = ir_pass.InjectDoubleBuffer(stmt, cfg.double_buffer_split_loop)
-    stmt = ir_pass.StorageRewrite(stmt)
-    stmt = ir_pass.UnrollLoop(
-        stmt,
-        cfg.auto_unroll_max_step,
-        cfg.auto_unroll_max_depth,
-        cfg.auto_unroll_max_extent,
-        cfg.unroll_explicit)
+    #stmt = ir_pass.StorageRewrite(stmt)
+    #stmt = ir_pass.UnrollLoop(
+    #    stmt,
+    #    cfg.auto_unroll_max_step,
+    #    cfg.auto_unroll_max_depth,
+    #    cfg.auto_unroll_max_extent,
+    #    cfg.unroll_explicit)
     for f in lower_phase2:
         stmt = f(stmt)
 
@@ -417,3 +417,4 @@ def build(inputs,
         if mdev:
             mhost.import_module(mdev)
     return mhost
+

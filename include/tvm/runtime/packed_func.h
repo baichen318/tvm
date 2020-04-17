@@ -1012,8 +1012,10 @@ inline const char* TypeCode2Str(int type_code) {
     case kTVMContext: return "TVMContext";
     case kTVMPackedFuncHandle: return "FunctionHandle";
     case kTVMModuleHandle: return "ModuleHandle";
-    case kTVMNDArrayHandle: return "NDArrayContainer";
+    //case kTVMNDArrayHandle: return "NDArrayContainer";
     case kTVMObjectHandle: return "Object";
+    case kFixed: return "fixed";
+    case kUFixed: return "ufixed";
     default: LOG(FATAL) << "unknown type_code="
                         << static_cast<int>(type_code); return "";
   }
@@ -1082,6 +1084,10 @@ inline DLDataType String2DLDataType(std::string s) {
     t.code = kDLUInt; scan = s.c_str() + 4;
   } else if (s.substr(0, 5) == "float") {
     t.code = kDLFloat; scan = s.c_str() + 5;
+  } else if (s.substr(0, 5) == "fixed") {
+    t.code = kFixed;  scan = s.c_str() + 5;
+  } else if (s.substr(0, 6) == "ufixed") {
+    t.code = kUFixed; scan = s.c_str() + 6;
   } else if (s.substr(0, 6) == "handle") {
     t.code = kTVMOpaqueHandle;
     t.bits = 64;  // handle uses 64 bit by default.
@@ -1101,10 +1107,15 @@ inline DLDataType String2DLDataType(std::string s) {
   uint8_t bits = static_cast<uint8_t>(strtoul(scan, &xdelim, 10));
   if (bits != 0) t.bits = bits;
   char* endpt = xdelim;
+  if (*xdelim == '_') {
+    unsigned fracs = strtoul(xdelim + 1, &xdelim, 10);
+    if (fracs > bits) LOG(FATAL) << "fraction bits cannot be greater than totoal bits: " << fracs << " > " << bits;
+    t.fracs = static_cast<uint8_t>(fracs);
+  }
   if (*xdelim == 'x') {
     t.lanes = static_cast<uint16_t>(strtoul(xdelim + 1, &endpt, 10));
   }
-  CHECK(endpt == s.c_str() + s.length()) << "unknown type " << s;
+  //CHECK(endpt == s.c_str() + s.length()) << "unknown type " << s;
   return t;
 }
 
