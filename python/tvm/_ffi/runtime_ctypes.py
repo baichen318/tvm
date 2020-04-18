@@ -52,7 +52,8 @@ class DataType(ctypes.Structure):
     """TVM datatype structure"""
     _fields_ = [("type_code", ctypes.c_uint8),
                 ("bits", ctypes.c_uint8),
-                ("lanes", ctypes.c_uint16)]
+                ("lanes", ctypes.c_uint16),
+                ("fracs", ctypes.c_uint8)]
     CODE2STR = {
         0 : 'int',
         1 : 'uint',
@@ -70,9 +71,7 @@ class DataType(ctypes.Structure):
             self.lanes = 1
             return
 
-        arr = type_str.split("x")
-        head = arr[0]
-        self.lanes = int(arr[1]) if len(arr) > 1 else 1
+        head = type_str
         bits = 32
 
         if head.startswith("int"):
@@ -88,6 +87,12 @@ class DataType(ctypes.Structure):
             self.type_code = 4
             bits = 64
             head = ""
+        elif head.startswith("fixed"):
+            self.type_code = 0
+            head = head[5:]
+        elif head.startswith("ufixed"):
+            self.type_code = 1
+            head = head[6:]
         elif head.startswith("custom"):
             # pylint: disable=import-outside-toplevel
             import tvm.runtime._ffi_api
@@ -99,9 +104,16 @@ class DataType(ctypes.Structure):
             head = head[high+1:]
         else:
             raise ValueError("Do not know how to handle type %s" % type_str)
-        bits = int(head) if head else bits
-        self.bits = bits
-
+        if head:
+            strs = head.split('x')
+            self.lanes = int(strs[1]) if len(strs) > 1 else 1
+            strs = strs[0].split('_')
+            self.bits = int(strs[0])
+            self.fracs = int(strs[1]) if len(strs) > 1 else 0
+        else:
+            self.bits = bits
+            self.lanes = 1
+            self.fracs = 0
 
     def __repr__(self):
         # pylint: disable=import-outside-toplevel
@@ -121,7 +133,8 @@ class DataType(ctypes.Structure):
     def __eq__(self, other):
         return (self.bits == other.bits and
                 self.type_code == other.type_code and
-                self.lanes == other.lanes)
+                self.lanes == other.lanes and
+                self.fracs == other.fracs)
 
     def __ne__(self, other):
         return not self.__eq__(other)

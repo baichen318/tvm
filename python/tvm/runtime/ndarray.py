@@ -138,7 +138,27 @@ class NDArray(NDArrayBase):
         if source_array.shape != shape:
             raise ValueError("array shape do not match the shape of NDArray {0} vs {1}".format(
                 source_array.shape, shape))
-        source_array = np.ascontiguousarray(source_array, dtype=dtype)
+        if dtype[0:3] == "int" or dtype[0:4] == "uint" or dtype[0:5] == "fixed" or dtype[0:6] == "ufixed":
+            if t.bits != 64:
+                num_bits = 1 << t.bits
+                num_bits_1 = 1 << (t.bits - 1)
+                byte = get_byte(t.bits)
+                if t.fracs > 0:
+                    source_array = source_array * (1 << t.fracs)
+                if dtype[0:3] == "int" or dtype[0:5] == "fixed":
+                    def vec(x):
+                        x = int(x) % num_bits
+                        x = x if x < num_bits_1 else x - num_bits
+                        return x
+                    vfunc = np.vectorize(vec)
+                    source_array = vfunc(source_array)
+                    source_array = np.ascontiguousarray(source_array, dtype="i" + str(byte))
+                else:
+                    source_array = source_array.astype("u" + str(byte))
+                    source_array = source_array % num_bits
+                    source_array = np.ascontiguousarray(source_array, dtype="u" + str(byte))
+        else:
+            source_array = np.ascontiguousarray(source_array, dtype=dtype)
         assert source_array.flags['C_CONTIGUOUS']
         data = source_array.ctypes.data_as(ctypes.c_void_p)
         nbytes = ctypes.c_size_t(source_array.size * source_array.dtype.itemsize)
@@ -189,6 +209,13 @@ class NDArray(NDArrayBase):
             return self._copyto(res)
         raise ValueError("Unsupported target type %s" % str(type(target)))
 
+
+def get_byte(bit):
+    byte = 1
+    while ((byte << 3) < bit):
+        byte <<= 1
+
+    return byte
 
 def context(dev_type, dev_id=0):
     """Construct a TVM context with given device type and id.
@@ -273,6 +300,7 @@ def empty(shape, dtype="float32", ctx=context(1, 0)):
         ctypes.c_int(dtype.type_code),
         ctypes.c_int(dtype.bits),
         ctypes.c_int(dtype.lanes),
+        ctypes.c_int(dtype.fracs),
         ctx.device_type,
         ctx.device_id,
         ctypes.byref(handle)))
@@ -466,7 +494,7 @@ cl = opencl
 mtl = metal
 
 
-def array(arr, ctx=cpu(0)):
+def array(arr, dtype=None, ctx=cpu(0)):
     """Create an array from source arr.
 
     Parameters
@@ -484,7 +512,9 @@ def array(arr, ctx=cpu(0)):
     """
     if not isinstance(arr, (np.ndarray, NDArray)):
         arr = np.array(arr)
-    return empty(arr.shape, arr.dtype, ctx).copyfrom(arr)
+    if dtype is None:
+        dtype = arr.dtype
+    return empty(arr.shape, dtype, ctx).copyfrom(arr)
 
 # Register back to FFI
 _set_class_ndarray(NDArray)
