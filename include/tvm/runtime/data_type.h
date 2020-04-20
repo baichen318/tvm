@@ -68,13 +68,23 @@ class DataType {
    *         everything to predictable-but-unlikely values
    */
   /*! \brief default constructor */
-  DataType() : qmode(RND), omode(SAT) {}
+  DataType() : qmode(RND), omode(SAT) {
+    data_.code = 0;
+    data_.bits = 0;
+    data_.lanes = 0;
+    data_.fracs = 0;
+  }
   /*!
    * \brief Constructor
    * \param dtype The DLDataType
    */
   explicit DataType(DLDataType dtype)
-      : data_(dtype), qmode(RND), omode(SAT) {}
+      : qmode(RND), omode(SAT) {
+    data_.code = static_cast<uint8_t>(dtype.code);
+    data_.bits = static_cast<uint8_t>(dtype.bits);
+    data_.lanes = static_cast<uint16_t>(dtype.lanes);
+    data_.fracs = static_cast<uint8_t>(dtype.fracs);
+  }
   /*!
    * \brief Constructor
    * \param code The type code.
@@ -167,7 +177,7 @@ class DataType {
    */
   DataType with_lanes(int lanes) const {
     return DataType(data_.code, data_.bits, lanes,
-      fracs(), qmode, omode);
+      data_.fracs, qmode, omode);
   }
   /*!
    * \brief Create a new data type by change bits to a specified value.
@@ -176,7 +186,7 @@ class DataType {
    */
   DataType with_bits(int bits) const {
     return DataType(data_.code, bits, data_.lanes,
-      fracs(), qmode, omode);
+      data_.fracs, qmode, omode);
   }
   /*! \return DataType with same type code and lanes, but new_fracs for
    *  the number of fracs  bits.
@@ -227,8 +237,8 @@ class DataType {
    * \param lanes The number of lanes.
    * \return The constructed data type.
    */
-  static DataType Int(int bits, int lanes = 1) {
-    return DataType(kDLInt, bits, lanes);
+  static DataType Int(int bits, int lanes = 1, int fracs = 0) {
+    return DataType(kDLInt, bits, lanes, fracs);
   }
   /*!
    * \brief Construct an uint type.
@@ -236,8 +246,8 @@ class DataType {
    * \param lanes The number of lanes
    * \return The constructed data type.
    */
-  static DataType UInt(int bits, int lanes = 1) {
-    return DataType(kDLUInt, bits, lanes);
+  static DataType UInt(int bits, int lanes = 1, int fracs = 0) {
+    return DataType(kDLUInt, bits, lanes, fracs);
   }
   /*!
    * \brief Construct an uint type.
@@ -263,7 +273,7 @@ class DataType {
    * \return The constructed data type.
    */
   static DataType Handle(int bits = 64, int lanes = 1) {
-    return DataType(kHandle, bits, lanes);
+    return DataType(kHandle, bits, lanes, 0, RND, SAT);
   }
   /** Constructing a signed fixed-point type */
   inline DataType Fixed(int bits, int fracs, int lanes = 1,
@@ -313,8 +323,7 @@ inline int GetVectorBytes(DataType dtype) {
   }
   // CHECK_EQ(data_bits % 8, 0U)
   //     << "Need to load/store by multiple of bytes";
-  return data_bits / 8;
-  // return (data_bits + 7) / 8;
+  return (data_bits + 7) / 8;
 }
 
 /*!

@@ -40,6 +40,8 @@ class TypeCode(object):
     BYTES = 12
     NDARRAY_HANDLE = 13
     EXT_BEGIN = 15
+    FIXED = 17
+    UFIXED = 18
 
 
 class TVMByteArray(ctypes.Structure):
@@ -126,6 +128,8 @@ class DataType(ctypes.Structure):
             type_name = "custom[%s]" % \
                         tvm.runtime._ffi_api._datatype_get_type_name(self.type_code)
         x = "%s%d" % (type_name, self.bits)
+        if self.fracs != 0:
+            x += "_%d" % self.fracs
         if self.lanes != 1:
             x += "x%d" % self.lanes
         return x

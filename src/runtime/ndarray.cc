@@ -272,6 +272,7 @@ int TVMArrayAlloc(const tvm_index_t* shape,
                   int dtype_code,
                   int dtype_bits,
                   int dtype_lanes,
+                  int dtype_fracs,
                   int device_type,
                   int device_id,
                   TVMArrayHandle* out) {
@@ -280,6 +281,7 @@ int TVMArrayAlloc(const tvm_index_t* shape,
   dtype.code = static_cast<uint8_t>(dtype_code);
   dtype.bits = static_cast<uint8_t>(dtype_bits);
   dtype.lanes = static_cast<uint16_t>(dtype_lanes);
+  dtype.fracs = static_cast<uint8_t>(dtype_fracs);
   DLContext ctx;
   ctx.device_type = static_cast<DLDeviceType>(device_type);
   ctx.device_id = device_id;

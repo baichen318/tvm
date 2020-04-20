@@ -305,7 +305,7 @@ llvm::Type* CodeGenLLVM::LLVMType(const DataType& t) const {
     return t_void_p_;
   }
   llvm::Type* etype = nullptr;
-  if (t.is_int() || t.is_uint()) {
+  if (t.is_fixed() || t.is_ufixed()) {
     etype = llvm::Type::getIntNTy(*ctx_, t.bits());
   } else if (t.is_float()) {
     switch (t.bits()) {
@@ -542,18 +542,27 @@ void CodeGenLLVM::CreateSerialFor(llvm::Value* begin,
   builder_->CreateCondBr(CreateLT(loop_var.dtype(), loop_value, end),
                          for_body, for_end, md_very_likely_branch_);
   builder_->SetInsertPoint(for_body);
+  has_return_ = false;
   this->VisitStmt(body);
   var_map_.erase(loop_var.get());
-  llvm::Value* loop_next = CreateAdd(loop_var.dtype(), loop_value, stride);
-  loop_value->addIncoming(loop_next, builder_->GetInsertBlock());
-  builder_->CreateBr(for_begin);
+  if (!has_break_ && !has_return_) {
+    llvm::Value* loop_next = CreateAdd(loop_var.dtype(), loop_value, stride);
+    loop_value->addIncoming(loop_next, builder_->GetInsertBlock());
+    builder_->CreateBr(for_begin);
+  }
+  else if (has_break_)
+    has_break_ = false;
+  else
+    has_return_ = false;
   builder_->SetInsertPoint(for_end);
+  break_bbs_.pop_back();
 }
 
 // cast operatpr
 llvm::Value* CodeGenLLVM::CreateCast(DataType from, DataType to, llvm::Value* value) {
   llvm::Type * target = LLVMType(to);
-  if (value->getType() == target) return value;
+  if (value->getType() == target)
+    return value;
   if (to.is_handle()) {
     return builder_->CreateBitCast(value, target);
   } else if ((from.is_fixed() || from.is_ufixed()) && (to.is_fixed() || to.is_ufixed())) {
@@ -584,7 +593,10 @@ llvm::Value* CodeGenLLVM::CreateCast(DataType from, DataType to, llvm::Value* va
       int diff = to.fracs() - from.fracs();
       if (diff < 0) {
         llvm::Value* ldiff = llvm::ConstantInt::get(LLVMType(to), -diff);
-        return builder_->CreateShl(ext, ldiff);
+        if (from.is_ufixed())
+          return builder_->CreateLShr(ext, ldiff);
+        else
+          return builder_->CreateAShr(ext, ldiff);
       } else if (diff > 0) {
         llvm::Value* ldiff = llvm::ConstantInt::get(LLVMType(to), diff);
         return builder_->CreateShl(ext, ldiff);
@@ -652,6 +664,7 @@ llvm::Value* CodeGenLLVM::GetConstString(const std::string& str) {
 
 llvm::Value* CodeGenLLVM::CreateBufferPtr(
     DataType t, llvm::Value* buffer, llvm::Value* index) {
+  index = CreateCast(t, DataType::Int(32), index);
   CHECK_EQ(t.lanes(), 1);
   llvm::PointerType* btype = llvm::dyn_cast<llvm::PointerType>(buffer->getType());
   CHECK(btype != nullptr);
@@ -880,7 +893,12 @@ llvm::Value* CodeGenLLVM::VisitExpr_(const CastNode* op) {
   return CreateCast(op->value.dtype(), op->dtype, MakeValue(op->value));
 }
 llvm::Value* CodeGenLLVM::VisitExpr_(const IntImmNode* op) {
-  return llvm::ConstantInt::getSigned(LLVMType(op->dtype), op->value);
+  llvm::Value* val = llvm::ConstantInt::getSigned(LLVMType(op->dtype), op->value);
+  if (op->dtype.fracs() > 0) {
+    llvm::Value* fracs = llvm::ConstantInt::get(LLVMType(op->dtype), op->dtype.fracs());
+    return builder_->CreateShl(val, fracs);
+  }
+  return val;
 }
 
 llvm::Value* CodeGenLLVM::VisitExpr_(const FloatImmNode* op) {
@@ -894,13 +912,13 @@ llvm::Value* CodeGenLLVM::VisitExpr_(const StringImmNode* op) {
 #define DEFINE_CODEGEN_BINARY_OP(Op)                                    \
   llvm::Value* CodeGenLLVM::Create ## Op(                               \
       DataType t, llvm::Value* a, llvm::Value *b) {                     \
-    if (t.is_int()) {                                                   \
+    if (t.is_fixed()) {                                                 \
       if (t.bits() >= 32) {                                             \
         return builder_->CreateNSW ## Op (a, b);                        \
       } else {                                                          \
         return builder_->Create ## Op (a, b);                           \
       }                                                                 \
-    } else if (t.is_uint()) {                                           \
+    } else if (t.is_ufixed()) {                                         \
       if (t.bits() >= 32) {                                             \
         return builder_->CreateNUW ## Op (a, b);                        \
       } else {                                                          \
@@ -922,9 +940,9 @@ DEFINE_CODEGEN_BINARY_OP(Mul);
 #define DEFINE_CODEGEN_CMP_OP(Op)                                       \
   llvm::Value* CodeGenLLVM::Create ## Op(                               \
       DataType t, llvm::Value* a, llvm::Value* b) {                     \
-    if (t.is_int()) {                                                   \
+    if (t.is_fixed()) {                                                 \
       return builder_->CreateICmpS ## Op (a, b);                        \
-    } else if (t.is_uint()) {                                           \
+    } else if (t.is_ufixed()) {                                         \
       return builder_->CreateICmpU ## Op (a, b);                        \
     } else {                                                            \
       CHECK(t.is_float());                                              \
@@ -943,9 +961,21 @@ DEFINE_CODEGEN_CMP_OP(GE);
 llvm::Value* CodeGenLLVM::VisitExpr_(const DivNode* op) {
   llvm::Value* a = MakeValue(op->a);
   llvm::Value* b = MakeValue(op->b);
-  if (op->dtype.is_int()) {
+  if (op->dtype.is_fixed()) {
+    if (op->dtype.fracs() > 0) {
+      llvm::Value* fa = CreateCast(op->dtype, DataType::Float(64), a);
+      llvm::Value* fb = CreateCast(op->dtype, DataType::Float(64), b);
+      llvm::Value* div = builder_->CreateFDiv(fa, fb);
+      return CreateCast(DataType::Float(64), op->dtype, div);
+    }
     return builder_->CreateSDiv(a, b);
-  } else if (op->dtype.is_uint()) {
+  } else if (op->dtype.is_ufixed()) {
+    if (op->dtype.fracs() > 0) {
+      llvm::Value* fa = CreateCast(op->dtype, DataType::Float(64), a);
+      llvm::Value* fb = CreateCast(op->dtype, DataType::Float(64), b);
+      llvm::Value* div = builder_->CreateFDiv(fa, fb);
+      return CreateCast(DataType::Float(64), op->dtype, div);
+    }
     return builder_->CreateUDiv(a, b);
   } else {
     CHECK(op->dtype.is_float());
@@ -956,9 +986,9 @@ llvm::Value* CodeGenLLVM::VisitExpr_(const DivNode* op) {
 llvm::Value* CodeGenLLVM::VisitExpr_(const ModNode* op) {
   llvm::Value* a = MakeValue(op->a);
   llvm::Value* b = MakeValue(op->b);
-  if (op->dtype.is_int()) {
+  if (op->dtype.is_fixed()) {
     return builder_->CreateSRem(a, b);
-  } else if (op->dtype.is_uint()) {
+  } else if (op->dtype.is_ufixed()) {
     return builder_->CreateURem(a, b);
   } else {
     CHECK(op->dtype.is_float());
@@ -981,7 +1011,7 @@ llvm::Value* CodeGenLLVM::VisitExpr_(const MaxNode* op) {
 llvm::Value* CodeGenLLVM::VisitExpr_(const EQNode* op) {
   llvm::Value* a = MakeValue(op->a);
   llvm::Value* b = MakeValue(op->b);
-  if (op->a.dtype().is_int() || op->a.dtype().is_uint()) {
+  if (op->a.dtype().is_fixed() || op->a.dtype().is_ufixed()) {
     return builder_->CreateICmpEQ(a, b);
   } else {
     return builder_->CreateFCmpOEQ(a, b);
@@ -991,7 +1021,7 @@ llvm::Value* CodeGenLLVM::VisitExpr_(const EQNode* op) {
 llvm::Value* CodeGenLLVM::VisitExpr_(const NENode* op) {
   llvm::Value* a = MakeValue(op->a);
   llvm::Value* b = MakeValue(op->b);
-  if (op->a.dtype().is_int() || op->a.dtype().is_uint()) {
+  if (op->a.dtype().is_fixed() || op->a.dtype().is_ufixed()) {
     return builder_->CreateICmpNE(a, b);
   } else {
     return builder_->CreateFCmpONE(a, b);
@@ -1218,7 +1248,6 @@ void CodeGenLLVM::VisitStmt_(const StoreNode* op) {
   llvm::Value* buffer = MakeValue(op->buffer_var);
   llvm::Value* index = MakeValue(op->index);
   llvm::Value* value = MakeValue(op->value);
-
   if (t.lanes() == 1) {
     int alignment, native_bits;
     GetAlignment(t, op->buffer_var.get(), op->index, &alignment, &native_bits);
@@ -1278,22 +1307,43 @@ void CodeGenLLVM::VisitStmt_(const IfThenElseNode* op) {
       *ctx_, "if_then", function_);
   BasicBlock* end_block = BasicBlock::Create(
       *ctx_, "if_end", function_);
+  bool if_has_return = false;
+  bool else_has_return = false;
   if (op->else_case.defined()) {
     BasicBlock* else_block = BasicBlock::Create(
         *ctx_, "if_else", function_);
     builder_->CreateCondBr(cond, then_block, else_block);
     builder_->SetInsertPoint(then_block);
+    has_return_ = false;
     this->VisitStmt(op->then_case);
-    builder_->CreateBr(end_block);
+    if (!has_break_ && !has_return_)
+      builder_->CreateBr(end_block);
+    else if (has_break_)
+      has_break_ = false;
+    else
+      if_has_return = true;
     builder_->SetInsertPoint(else_block);
+    has_return_ = false;
     this->VisitStmt(op->else_case);
-    builder_->CreateBr(end_block);
+    if (!has_break_ && !has_return_)
+      builder_->CreateBr(end_block);
+    else if (has_break_)
+      has_break_ = false;
+    else
+      else_has_return = true;
   } else {
     builder_->CreateCondBr(cond, then_block, end_block, md_very_likely_branch_);
     builder_->SetInsertPoint(then_block);
+    has_return_ = false;
     this->VisitStmt(op->then_case);
-    builder_->CreateBr(end_block);
+    if (!has_break_ && !has_return_)
+      builder_->CreateBr(end_block);
+    else if (has_break_)
+      has_break_ = false;
+    else
+      if_has_return = true;
   }
+  has_return_ = if_has_return && else_has_return;
   builder_->SetInsertPoint(end_block);
 }
 

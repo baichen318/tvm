@@ -301,6 +301,11 @@ class CodeGenLLVM :
   std::unordered_set<const VarNode*> alias_var_set_;
   // set of volatile buffer.
   std::unordered_set<const VarNode*> volatile_buf_;
+  // for break statement
+  std::vector<llvm::BasicBlock*> break_bbs_;
+  bool has_break_{false};
+  // for return statement
+  bool has_return_{false};
   /*! \brief Helper struct for debug infos. */
   struct DebugInfo {
     std::unique_ptr<llvm::DIBuilder> di_builder_;

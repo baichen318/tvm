@@ -1033,6 +1033,9 @@ inline std::ostream& operator<<(std::ostream& os, DLDataType t) {  // NOLINT(*)
   }
   if (t.code == kTVMOpaqueHandle) return os;
   os << static_cast<int>(t.bits);
+  if (t.fracs > 0) {
+    os << '_' << static_cast<int>(t.fracs);
+  }
   if (t.lanes != 1) {
     os << 'x' << static_cast<int>(t.lanes);
   }
@@ -1062,6 +1065,9 @@ inline std::string DLDataType2String(DLDataType t) {
   }
   if (t.code == kTVMOpaqueHandle) return repr;
   repr += std::to_string(static_cast<int>(t.bits));
+  if (t.fracs > 0) {
+    repr += "_" + std:to_string(static_cast<int>(t.fracs));
+  }
   if (t.lanes != 1) {
     repr += "x" + std::to_string(static_cast<int>(t.lanes));
   }
@@ -1076,7 +1082,7 @@ inline DLDataType String2DLDataType(std::string s) {
     t.bits = 0; t.lanes = 0; t.code = kTVMOpaqueHandle;
     return t;
   }
-  t.bits = 32; t.lanes = 1;
+  t.bits = 32; t.lanes = 1; t.fracs = 0;
   const char* scan;
   if (s.substr(0, 3) == "int") {
     t.code = kDLInt;  scan = s.c_str() + 3;
@@ -1114,15 +1120,14 @@ inline DLDataType String2DLDataType(std::string s) {
     t.fracs = static_cast<uint8_t>(fracs);
   }
   char* endpt = xdelim;
-  if (*xdelim == '_') {
-    unsigned fracs = strtoul(xdelim + 1, &xdelim, 10);
-    if (fracs > bits) LOG(FATAL) << "fraction bits cannot be greater than totoal bits: " << fracs << " > " << bits;
-    t.fracs = static_cast<uint8_t>(fracs);
-  }
   if (*xdelim == 'x') {
     t.lanes = static_cast<uint16_t>(strtoul(xdelim + 1, &endpt, 10));
   }
-  //CHECK(endpt == s.c_str() + s.length()) << "unknown type " << s;
+  CHECK(endpt == s.c_str() + s.length()) << "unknown type " << s;
+  if (t.code == kFixed)
+    t.code = static_cast<uint8_t>(kDLInt);
+  else if (t.code == kUFixed)
+    t.code = static_cast<uint8_t>(kDLUInt);
   return t;
 }
 
