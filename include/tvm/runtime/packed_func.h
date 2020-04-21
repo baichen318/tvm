@@ -1012,7 +1012,7 @@ inline const char* TypeCode2Str(int type_code) {
     case kTVMContext: return "TVMContext";
     case kTVMPackedFuncHandle: return "FunctionHandle";
     case kTVMModuleHandle: return "ModuleHandle";
-    //case kTVMNDArrayHandle: return "NDArrayContainer";
+    case kTVMNDArrayHandle: return "NDArrayContainer";
     case kTVMObjectHandle: return "Object";
     case kFixed: return "fixed";
     case kUFixed: return "ufixed";
