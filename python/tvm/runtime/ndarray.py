@@ -187,12 +187,36 @@ class NDArray(NDArrayBase):
             shape = shape + (t.lanes,)
             t.lanes = 1
             dtype = str(t)
-        np_arr = np.empty(shape, dtype=dtype)
+        if dtype[0:3] == "int":
+            np_arr = np.empty(shape, dtype="i" + str(get_byte(t.bits)))
+        elif dtype[0:4] == "uint":
+            np_arr = np.empty(shape, dtype="u" + str(get_byte(t.bits)))
+        else:
+            np_arr = np.empty(shape, dtype=dtype)
         assert np_arr.flags['C_CONTIGUOUS']
         data = np_arr.ctypes.data_as(ctypes.c_void_p)
         nbytes = ctypes.c_size_t(np_arr.size * np_arr.dtype.itemsize)
         check_call(_LIB.TVMArrayCopyToBytes(self.handle, data, nbytes))
-        return np_arr
+        if dtype[0:3] == "int" or dtype[0:5] == "fixed":
+            if t.bits == 64:
+                return np_arr
+            num_bits = 1 << t.bits
+            num_bits_1 = 1 << (t.bits - 1)
+            vfunc = np.vectorize(lambda x: x if x < num_bits_1 else x - num_bits)
+            np_arr = vfunc(np_arr)
+            if t.fracs > 0:
+                np_arr = np_arr.astype("float64")
+                return np_arr / (1 << t.fracs)
+            else:
+                return np_arr
+        elif dtype[0:4] == "uint" or dtype[0:6] == "ufixed":
+            if t.fracs > 0:
+                np_arr = np_arr.astype("float64")
+                return np_arr / (1 << t.fracs)
+            else:
+                return np_arr
+        else:
+            return np_arr
 
     def copyto(self, target):
         """Copy array to target
