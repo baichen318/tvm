@@ -6,11 +6,11 @@ import tvm.tir._ffi_api as _ffi_api
 from collections import OrderedDict
 from tvm.tir import expr as _expr, stmt as _stmt
 from tvm.tir import IterVar as _IterVar
-from util import get_index, get_name, make_for, CastRemover
-from tensor import Scalar, Tensor, TensorSlice
-from schedule import Stage
-from debug import APIError
-from module import Module
+from .util import get_index, get_name, make_for, CastRemover
+from .tensor import Scalar, Tensor, TensorSlice
+from .schedule import Stage
+from .debug import APIError
+from .module import Module
 
 ##############################################################################
 # Helper classes and functions

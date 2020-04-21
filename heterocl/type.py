@@ -1,7 +1,7 @@
 """Define HeteroCL data types"""
 #pylint: disable=too-few-public-methods, too-many-return-statements
 import numbers
-from debug import DTypeError
+from .debug import DTypeError
 
 class Type(object):
     """The base class for all data types

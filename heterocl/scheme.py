@@ -1,7 +1,7 @@
 """Quantization scheme."""
 #pylint: disable=missing-docstring
-import type
-from debug import APIError
+from . import type
+from .debug import APIError
 
 class Scheme(object):
     """A quantization scheme.

@@ -6,11 +6,9 @@ import tvm.tir._ffi_api as _ffi_api
 from tvm.tir import expr as _expr, stmt as _stmt
 from tvm.tir.buffer import decl_buffer
 from tvm.runtime import ObjectGeneric
-from debug import TensorError
-from schedule import Stage
-import util
-import debug
-import type
+from .debug import TensorError
+from .schedule import Stage
+from . import util, debug, type
 from tvm.tir import _ffi_api
 
 class Scalar(ObjectGeneric, _expr.ExprOp):

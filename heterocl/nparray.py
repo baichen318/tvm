@@ -2,8 +2,8 @@
 #pylint: disable=missing-docstring
 import numpy as np
 from tvm.runtime.ndarray import array, cpu
-from util import get_dtype
-import type
+from .util import get_dtype
+from . import type
 
 def cast_np(np_in, dtype):
     """Cast a NumPy array to a specified data type.

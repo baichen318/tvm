@@ -7,12 +7,11 @@ import tvm
 from tvm.te import _ffi_api as tvm_api
 from tvm.te import schedule as _schedule
 from tvm.tir.op import call_intrin
-from tensor import Scalar, Tensor
-from schedule import Schedule, Stage
-from scheme import Scheme
-from nparray import  asarray
-import util
-import config
+from .tensor import Scalar, Tensor
+from .schedule import Schedule, Stage
+from .scheme import Scheme
+#from ndarray import  asarray
+from . import util, config
 
 def init(init_dtype="int32"):
     """Initialize a HeteroCL environment with configurations.

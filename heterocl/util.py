@@ -1,14 +1,13 @@
 """Utility functions for HeteroCL"""
 import tvm.tir._ffi_api as _ffi_api
-import type
-import config
+from . import type, config
 
 from tvm.tir import expr as _expr
 from tvm.tir.expr import Var, Call
 from tvm.tir.buffer import decl_buffer
-from scheme import Scheme
-from debug import DTypeError
-from mutator import Mutator
+from .scheme import Scheme
+from .debug import DTypeError
+from .mutator import Mutator
 
 class VarName():
     """A counter for each type of variables.

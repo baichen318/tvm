@@ -7,8 +7,8 @@ from ordered_set import OrderedSet
 from tvm.tir import stmt as _stmt
 from tvm.tir.buffer import decl_buffer
 from tvm.te._ffi_api import ExternOp as _ExternOp
-from debug import DSLError, APIError
-import util
+from .debug import DSLError, APIError
+from . import util
 
 class Schedule(object):
     """Create a compute schedule.
