@@ -44,7 +44,7 @@ void CodeGenCPU::Init(const std::string& module_name,
   // TVM runtime types
   t_tvm_shape_index_ = llvm::Type::getIntNTy(*ctx, DataType::ShapeIndex().bits());
   t_tvm_context_ = llvm::StructType::create({t_int_, t_int_});
-  t_tvm_type_ = llvm::StructType::create({t_int8_, t_int8_, t_int16_});
+  t_tvm_type_ = llvm::StructType::create({t_int8_, t_int8_, t_int16_, t_int8_});
   t_tvm_func_handle_ = t_void_p_;
   t_tvm_array_ = llvm::StructType::create(
       {t_void_p_,
@@ -286,6 +286,10 @@ llvm::Value* CodeGenCPU::CreateStructRefPtr(
     case intrinsic::kArrTypeLanes: {
       return builder_->CreateInBoundsGEP(
           buf, {index, ConstInt32(3), ConstInt32(2)});
+    }
+    case intrinsic::kArrTypeFracs: {
+      return builder_->CreateInBoundsGEP(
+          buf, {index, ConstInt32(3), ConstInt32(3)});
     }
     case intrinsic::kArrByteOffset: {
       return builder_->CreateInBoundsGEP(buf, {index, ConstInt32(6)});
@@ -908,7 +912,8 @@ void CodeGenCPU::VisitStmt_(const AttrStmtNode* op) {
 void CodeGenCPU::VisitStmt_(const ForNode* op) {
   CHECK(is_zero(op->min));
   if (op->for_type == ForType::Serial ||
-      op->for_type == ForType::Unrolled) {
+      op->for_type == ForType::Unrolled ||
+      op->for_type == ForType::Pipelined) {
     CodeGenLLVM::VisitStmt_(op);
   } else if (op->for_type == ForType::Parallel) {
     if (parallel_env_.penv == nullptr) {
