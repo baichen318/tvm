@@ -508,7 +508,8 @@ enum class ForType : int {
   /*! \brief Vector SIMD loop annotaion. */
   Vectorized = 2,
   /*! \brief Unroll annotation. */
-  Unrolled = 3
+  Unrolled = 3,
+  Pipelined = 4
 };
 
 // Kevice api of for loop
