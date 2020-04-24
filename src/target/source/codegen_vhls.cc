@@ -37,32 +37,11 @@ void CodeGenVivadoHLS::Init(bool output_ssa) {
 }
 
 void CodeGenVivadoHLS::PrintType(DataType t, std::ostream& os) {
-  if (t.is_uint()) {
-    switch (t.bits()) {
-      case 8:
-        os << "unsigned char"; break;
-      case 16:
-        os << "unsigned short"; break;
-      case 32:
-        os << "unsigned int"; break;
-      case 64:
-        os << "unsigned long long"; break;
-      default:
-        os << "ap_uint<" << t.bits() << ">"; break;
-    }
-  } else if (t.is_int()) {
-    switch (t.bits()) {
-      case 8:
-        os << "char"; break;
-      case 16:
-        os << "short"; break;
-      case 32:
-        os << "int"; break;
-      case 64:
-        os << "long long"; break;
-      default:
-        os << "ap_int<" << t.bits() << ">"; break;
-    }
+  if (t.is_uint() || t.is_int() || t.is_fixed() || t.is_ufixed()) {
+    if (t.is_uint())        os << "ap_uint<" << t.bits() << ">";
+    else if (t.is_int())    os << "ap_int<" << t.bits() << ">";
+    else if (t.is_ufixed()) os << "ap_ufixed<" << t.bits() << ", " << t.bits() - t.fracs() << ">";
+    else                    os << "ap_fixed<" << t.bits() << ", " << t.bits() - t.fracs() << ">";
   } else {
     CodeGenC::PrintType(t, os);
   }
