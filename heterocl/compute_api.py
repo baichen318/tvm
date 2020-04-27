@@ -10,6 +10,7 @@ from .util import get_index, get_name, make_for, CastRemover
 from .tensor import Scalar, Tensor, TensorSlice
 from .schedule import Stage
 from .debug import APIError
+from .dsl import if_, for_
 from .module import Module
 
 ##############################################################################
@@ -127,7 +128,6 @@ def compute_body(name,
         stage.lhs_tensors.add(tensor)
         for t in stage.lhs_tensors:
             t.last_update = stage
-
         stmt = None
         if ret is None:
             # replace all hcl.return_ with Store stmt
@@ -271,3 +271,346 @@ def compute(shape, fcompute, name=None, dtype=None, attrs=OrderedDict()):
     tensor = compute_body(name, lambda_ivs, fcompute, shape, dtype, attrs=attrs)
 
     return tensor
+
+def update(tensor, fcompute, name=None):
+    """Update an existing tensor according to the compute function.
+
+    This API **update** an existing tensor. Namely, no new tensor is returned.
+    The shape and data type stay the same after the update. For more details
+    on `fcompute`, please check :obj:`compute`.
+
+    Parameters
+    ----------
+    tensor : Tensor
+        The tensor to be updated
+
+    fcompute: callable
+        The update rule
+
+    name : str, optional
+        The name of the update operation
+
+    Returns
+    -------
+    None
+    """
+    # properties for the returned tensor
+    shape = tensor.shape
+    name = get_name("update", name)
+
+    # prepare the iteration variables
+    args, nargs = process_fcompute(fcompute, shape)
+    lambda_ivs = [_IterVar((0, shape[n]), args[n], 0) for n in range(0, nargs)]
+
+    # call the helper function that updates the tensor
+    compute_body(name, lambda_ivs, fcompute, tensor=tensor)
+
+def mutate(domain, fcompute, name=None):
+    """
+    Perform a computation repeatedly in the given mutation domain.
+
+    This API allows users to write a loop in a tensorized way, which makes it
+    easier to exploit the parallelism when performing optimizations. The rules
+    for the computation function are the same as that of :obj:`compute`.
+
+    Parameters
+    ----------
+    domain : tuple
+        The mutation domain
+
+    fcompute : callable
+        The computation function that will be performed repeatedly
+
+    name : str, optional
+        The name of the operation
+
+    Returns
+    -------
+    None
+
+    Examples
+    --------
+    .. code-block:: python
+
+        # this example finds the max two numbers in A and stores it in M
+
+        A = hcl.placeholder((10,))
+        M = hcl.placeholder((2,))
+
+        def loop_body(x):
+            with hcl.if_(A[x] > M[0]):
+                with hcl.if_(A[x] > M[1]):
+                    M[0] = M[1]
+                    M[1] = A[x]
+                with hcl.else_():
+                    M[0] = A[x]
+        hcl.mutate(A.shape, lambda x: loop_body(x))
+    """
+    # check API correctness
+    if not isinstance(domain, tuple):
+        raise APIError("The mutation domain must be a tuple")
+    name = get_name("mutate", name)
+
+    # prepare the iteration variables
+    args, nargs = process_fcompute(fcompute, domain)
+    indices = [_IterVar((0, domain[n]), args[n], 0) for n in range(0, nargs)]
+    var_list = [i.var for i in indices]
+
+    # perform the computation
+    with Stage(name) as stage:
+        stage.stmt_stack.append([])
+        fcompute(*var_list)
+        body = stage.pop_stmt()
+        stage.emit(make_for(indices, body, 0))
+        stage.axis_list = indices + stage.axis_list
+
+def scalar(init=0, name=None, dtype=None):
+    """A syntactic sugar for a single-element tensor.
+
+    This is equivalent to ``hcl.compute((1,), lambda x: init, name, dtype)``
+
+    Parameters
+    ----------
+    init : Expr, optional
+        The initial value for the returned tensor. The default value is 0.
+
+    name : str, optional
+        The name of the returned tensor
+
+    dtype : Type, optional
+        The data type of the placeholder
+
+    Returns
+    -------
+    Tensor
+    """
+    name = get_name("scalar", name)
+    return compute((1,), lambda x: init, name, dtype)
+
+def reduce_axis(lower, upper, name=None):
+    """Create a reduction axis for reduction operations.
+
+    The upper- and lower-bound of the range can be arbitrary integers. However,
+    the upper-bound should be greater than the lower-bound.
+
+    Parameters
+    ----------
+    lower : Expr
+        The lower-bound of the reduction domain
+
+    upper : Expr
+        The upper-bound of the reduction domain
+
+    name : str, optional
+        The name of the reduction axis
+
+    Returns
+    -------
+    IterVar
+    """
+    # check the correctness
+    if upper <= lower:
+        raise APIError("The upper-bound should be greater then the lower-bound")
+
+    name = get_name("ra", name)
+    return _IterVar((lower, upper), name, 2)
+
+def reducer(init, freduce, dtype="int32", name=None):
+    """Create a reducer for a reduction operation.
+
+    This API creates a reducer according to the initial value `init` and the
+    reduction function `freduce`. The initial value can be either an
+    expression or a tensor. With the reducer, users can create a reduction
+    operation, where the users can further specify the input to be reduced
+    `expr`, its axis `axis`, and the condition `where`. The general rule of
+    the reduction operation is shown below. Note that for the reduction
+    function, **the first argument is the input while the second argument
+    is the accumulator**. Moreover, if the accumulator is an expression,
+    the reduction function **should return an expression**. On the other hand,
+    if the accumulator is a list or a tensor, the reduction function **should
+    not return anything**.
+
+    .. code-block:: python
+
+        # this can be a tensor
+        output = init
+        # the specified reduction axis
+        for i in reduction_domain:
+            if (where):
+                output = freduce(input[..., i, ...], output)
+
+    Users can further specify the data type for the reduction operation. For
+    a multi-dimensional reduction operation, users can have multiple reduce
+    axes. In this case, we can write them together in a list.
+
+    Parameters
+    ----------
+    init : Expr or Tensor
+        The initial value of the accumulator
+
+    freduce : callable
+        The reduction function that takes in two arguments. The first argument
+        is the new input value and the second argument is the accumulator
+
+    dtype : Type, optional
+        The data type of the accumulator
+
+    name : str, optional
+        The name of the generated reducer
+
+    Returns
+    -------
+    callable
+
+    See Also
+    --------
+    sum, max
+
+    Examples
+    --------
+    .. code-block:: python
+
+        # example 1.1 - basic reduction : summation
+        my_sum = hcl.reducer(0, lambda x, y: x+y)
+        A = hcl.placeholder((10,))
+        r = hcl.reduce_axis(0, 10)
+        B = hcl.compute((1,), lambda x: my_sum(A[r], axis=r))
+
+        # equivalent code
+        B[0] = 0
+        for r in (0, 10):
+            B[0] = A[r] + B[0]
+
+        # example 1.2 - with condition
+        B = hcl.compute((1,), lambda x: my_sum(A[r], axis=r, where=A[r]>5))
+
+        # equivalent code
+        B[0] = 0
+        for r in (0, 10):
+            if A[r] > 5:
+                B[0] = A[r] + B[0]
+
+        # example 1.3 - with data type specification
+        B = hcl.compute((1,), lambda x: my_sum(A[r], axis=r, dtype=hcl.UInt(4)))
+        # the output will be downsize to UInt(4)
+
+        # example 2 = a more complicated reduction
+        # x is the input, y is the accumulator
+        def my_reduction(x, y):
+            with hcl.if_(x > 5):
+                hcl.return_(y + x)
+            with hcl.else_():
+                hcl.return_(y - x)
+        my_sum = hcl.reducer(0, my_reduction)
+        A = hcl.placeholder((10,))
+        r = hcl.reduce_axis(0, 10)
+        B = hcl.compute((1,), lambda x: my_sum(A[r], axis=r))
+
+        # equivalent code
+        B[0] = 0
+        for r in range(0, 10):
+            if A[r] > 5:
+                B[0] = B[0] + A[r]
+            else:
+                B[0] = B[0] - A[r]
+
+        # example 3 - multiple reduce axes
+        A = hcl.placeholder((10, 10))
+        r1 = hcl.reduce_axis(0, 10)
+        r2 = hcl.reduce_axis(0, 10)
+        B = hcl.compute((1,), lambda x: my_sum(A[r1, r2], axis=[r1, r2]))
+
+        # equivalent code
+        B[0] = 0
+        for r1 in (0, 10):
+            for r2 in (0, 10):
+                B[0] = A[r1, r2] + B[0]
+
+        # example 4 - write a sorting algorithm with reduction
+        init = hcl.compute((10,), lambda x: 11)
+        def freduce(x, Y):
+            with hcl.for_(0, 10) as i:
+                with hcl.if_(x < Y[i]):
+                    with hcl.for_(9, i, -1) as j:
+                        Y[j] = Y[j-1]
+                    Y[i] = x
+                    hcl.break_()
+        my_sort = hcl.reducer(init, freduce)
+        A = hcl.placeholder((10, 10))
+        r = hcl.reduce_axis(0, 10)
+        # note that we need to use the underscore the mark the reduction axis
+        B = hcl.compute(A.shape, lambda _x, y: my_sort(A[r, y], axis=r))
+    """
+    def make_reduce(expr, axis, where=True, name=name, dtype=dtype):
+        if not isinstance(axis, (tuple, list)):
+            axis = [axis]
+        stage = Stage.get_current()
+        out = None
+        name = get_name("reducer", name)
+        # the accumulator is an expression
+        if isinstance(init, (_expr.PrimExpr, numbers.Number, Scalar)):
+            out = scalar(init, name, dtype)
+            def reduce_body():
+                stage.stmt_stack.append([])
+                with if_(where):
+                    ret = freduce(expr, out[0])
+                    if ret is None:
+                        stmt = stage.pop_stmt()
+                        stmt = ReplaceReturn(out._buf.data, out.dtype, 0).mutate(stmt)
+                        stage.emit(stmt)
+                    else:
+                        if not isinstance(ret, (_expr.PrimExpr, numbers.Number, Scalar)):
+                            raise APIError("The returned type of the \
+                                    reduction function should be an expression")
+                        out[0] = ret
+                        stmt = stage.pop_stmt()
+                        stage.emit(stmt)
+                return out[0]
+            stage.stmt_stack.append([])
+            ret = reduce_body()
+        # the accumulator is a tensor
+        else:
+            out = copy(init, name)
+            def reduce_body():
+                with if_(where):
+                    freduce(expr, out)
+                return out
+            stage.stmt_stack.append([])
+            ret = reduce_body()
+        body = stage.pop_stmt()
+        stage.input_stages.add(out.last_update)
+        body = make_for(axis, body, 0)
+        stage.axis_list += axis
+        stage.emit(body)
+        return ret
+
+    doc_str = """Compute the {0} of the given expression on axis.
+
+              Parameters
+              ----------
+              expr : Expr
+                  The expression to be reduced
+
+              axis : IterVar
+                  The axis to be reduced
+
+              where : Expr, optional
+                  The filtering condition for the reduction
+
+              name : str, optional
+                  The name of the accumulator
+
+              dtype : Type, optional
+                  The data type of the accumulator
+
+              Returns
+              -------
+              Expr
+
+              See Also
+              --------
+              reducer
+              """
+
+    make_reduce.__doc__ = doc_str.format(name)
+    return make_reduce

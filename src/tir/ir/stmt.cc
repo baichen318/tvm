@@ -391,6 +391,9 @@ std::ostream &operator<<(std::ostream& out, ForType type) { // NOLINT(*)
     case ForType::Vectorized:
       out << "vectorized";
       break;
+    case ForType::Pipelined:
+      out << "Pipelined";
+      break;
   }
   return out;
 }

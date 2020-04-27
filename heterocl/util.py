@@ -131,7 +131,7 @@ class CastRemover(Mutator):
             a = a.value
         if isinstance(b, _expr.ConstExpr):
             b = b.value
-        return binop(a, b, False)
+        return binop(a, b)
 
     def mutate_Cast(self, node):
         return self.mutate(node.value)

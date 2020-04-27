@@ -3,7 +3,7 @@
 import networkx as nx
 import matplotlib.pyplot as plt
 from ordered_set import OrderedSet
-#from .tvm import make as _make
+from tvm.tir import expr as _expr
 from tvm.tir import stmt as _stmt
 from tvm.tir.buffer import decl_buffer
 from tvm.te._ffi_api import ExternOp as _ExternOp
@@ -319,7 +319,7 @@ class Stage(object):
             # add attribute statement for later stage insertion
             superstage.emit(
                 lambda x: _stmt.AttrStmt(self._buf, "attach_scope",
-                                         _stmt.StringImm(superstage.name), x))
+                                         _expr.StringImm(superstage.name), x))
             # update the input stages of the superstage:
             # input_stages = original input stages + current input stages - last substages
             superstage.input_stages = superstage.input_stages.union(self.input_stages)

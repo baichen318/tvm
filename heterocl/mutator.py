@@ -131,205 +131,206 @@ class Mutator(object):
         return binop(a, b)
 
     def mutate_Add(self, node):
-        return self.mutate_BinOp(_make.Add, node)
+        print("mutator.py: Add", node)
+        return self.mutate_BinOp(_expr.Add, node)
 
     def mutate_Sub(self, node):
-        return self.mutate_BinOp(_make.Sub, node)
+        return self.mutate_BinOp(_expr.Sub, node)
 
     def mutate_Mul(self, node):
-        return self.mutate_BinOp(_make.Mul, node)
+        return self.mutate_BinOp(_expr.Mul, node)
 
     def mutate_Div(self, node):
-        return self.mutate_BinOp(_make.Div, node)
+        return self.mutate_BinOp(_expr.Div, node)
 
     def mutate_Mod(self, node):
-        return self.mutate_BinOp(_make.Mod, node)
+        return self.mutate_BinOp(_expr.Mod, node)
 
     def mutate_Min(self, node):
-        return self.mutate_BinOp(_make.Min, node)
+        return self.mutate_BinOp(_expr.Min, node)
 
     def mutate_Max(self, node):
-        return self.mutate_BinOp(_make.Max, node)
+        return self.mutate_BinOp(_expr.Max, node)
 
     def mutate_EQ(self, node):
-        return self.mutate_BinOp(_make.EQ, node)
+        return self.mutate_BinOp(_expr.EQ, node)
 
     def mutate_NE(self, node):
-        return self.mutate_BinOp(_make.NE, node)
+        return self.mutate_BinOp(_expr.NE, node)
 
     def mutate_LT(self, node):
-        return self.mutate_BinOp(_make.LT, node)
+        return self.mutate_BinOp(_expr.LT, node)
 
     def mutate_LE(self, node):
-        return self.mutate_BinOp(_make.LE, node)
+        return self.mutate_BinOp(_expr.LE, node)
 
     def mutate_GT(self, node):
-        return self.mutate_BinOp(_make.GT, node)
+        return self.mutate_BinOp(_expr.GT, node)
 
     def mutate_GE(self, node):
-        return self.mutate_BinOp(_make.GE, node)
+        return self.mutate_BinOp(_expr.GE, node)
 
     def mutate_And(self, node):
-        return self.mutate_BinOp(_make.And, node)
+        return self.mutate_BinOp(_expr.And, node)
 
     def mutate_Or(self, node):
-        return self.mutate_BinOp(_make.Or, node)
+        return self.mutate_BinOp(_expr.Or, node)
 
     def mutate_Not(self, node):
         a = self.mutate(node.a)
-        return _make.Not(a)
+        return _expr.Not(a)
 
     def mutate_Var(self, node):
         return node
 
     def mutate_Cast(self, node):
         value = self.mutate(node.value)
-        return _make.Cast(node.dtype, value)
+        return _expr.Cast(node.dtype, value)
 
     def mutate_Select(self, node):
-        condition = _make.Cast("uint1", self.mutate(node.condition))
+        condition = _expr.Cast("uint1", self.mutate(node.condition))
         true_value = convert(self.mutate(node.true_value))
         false_value = convert(self.mutate(node.false_value))
-        return _make.Select(condition, true_value, _make.Cast(true_value.dtype, false_value))
+        return _expr.Select(condition, true_value, _expr.Cast(true_value.dtype, false_value))
 
     def mutate_Load(self, node):
         buffer_var = self.mutate(node.buffer_var)
         index = self.mutate(node.index)
         predicate = self.mutate(node.predicate)
-        return _make.Load(node.dtype, buffer_var, index, predicate)
+        return _expr.Load(node.dtype, buffer_var, index, predicate)
 
     def mutate_Ramp(self, node):
         base = self.mutate(node.base)
         stride = self.mutate(node.stride)
-        return _make.Ramp(base, stride, node.lanes)
+        return _expr.Ramp(base, stride, node.lanes)
 
     def mutate_Broadcast(self, node):
         value = self.mutate(node.value)
-        return _make.Broadcast(value, node.lanes)
+        return _expr.Broadcast(value, node.lanes)
 
     def mutate_Call(self, node):
         args = []
         for arg in node.args:
             args.append(self.mutate(arg))
-        return _make.Call(node.dtype, node.name, args, node.call_type, node.func, node.value_index)
+        return _expr.Call(node.dtype, node.name, args, node.call_type, node.func, node.value_index)
 
     def mutate_Let(self, node):
         var = self.mutate(node.var)
         value = self.mutate(node.value)
         body = self.mutate(node.body)
-        return _make.Let(var, value, body)
+        return _expr.Let(var, value, body)
 
     def mutate_GetBit(self, node):
         a = self.mutate(node.a)
         index = self.mutate(node.index)
-        return _make.GetBit(a, index)
+        return _expr.GetBit(a, index)
 
     def mutate_GetSlice(self, node):
         a = self.mutate(node.a)
         index_left = self.mutate(node.index_left)
         index_right = self.mutate(node.index_right)
-        return _make.GetSlice(a, index_left, index_right)
+        return _expr.GetSlice(a, index_left, index_right)
 
     def mutate_SetBit(self, node):
         a = self.mutate(node.a)
         value = self.mutate(node.value)
         index = self.mutate(node.index)
-        return _make.SetBit(a, value, index)
+        return _expr.SetBit(a, value, index)
 
     def mutate_SetSlice(self, node):
         a = self.mutate(node.a)
         value = self.mutate(node.value)
         index_left = self.mutate(node.index_left)
         index_right = self.mutate(node.index_right)
-        return _make.SetSlice(a, value, index_left, index_right)
+        return _expr.SetSlice(a, value, index_left, index_right)
 
     def mutate_KernelExpr(self, node):
         args = self.mutate(node.args)
-        return _make.KernelExpr(node.dtype, args, node.name)
+        return _expr.KernelExpr(node.dtype, args, node.name)
 
     # statements
     def mutate_LetStmt(self, node):
         var = self.mutate(node.var)
         value = self.mutate(node.value)
         body = self.mutate(node.body)
-        return _make.LetStmt(var, value, body)
+        return _expr.LetStmt(var, value, body)
 
     def mutate_AssertStmt(self, node):
         condition = self.mutate(node.condition)
         message = self.mutate(node.message)
         body = self.mutate(node.body)
-        return _make.AssertStmt(condition, message, body)
+        return _expr.AssertStmt(condition, message, body)
 
     def mutate_ProducerConsumer(self, node):
         body = self.mutate(body)
-        return _make.ProducerConsumer(node.func, node.is_producer, body)
+        return _expr.ProducerConsumer(node.func, node.is_producer, body)
 
     def mutate_For(self, node):
         loop_var = self.mutate(node.loop_var)
         _min = self.mutate(node.min)
         extent = self.mutate(node.extent)
         body = self.mutate(node.body)
-        return _make.For(loop_var, _min, extent, node.for_type, node.device_api, body)
+        return _expr.For(loop_var, _min, extent, node.for_type, node.device_api, body)
 
     def mutate_Store(self, node):
         buffer_var = self.mutate(node.buffer_var)
         index = self.mutate(node.index)
         value = self.mutate(node.value)
         predicate = self.mutate(node.predicate)
-        return _make.Store(buffer_var, value, index, predicate)
+        return _expr.Store(buffer_var, value, index, predicate)
 
     def mutate_Allocate(self, node):
         buffer_var = self.mutate(node.buffer_var)
         extents = self.mutate(node.extents)
         condition = self.mutate(node.condition)
         body = self.mutate(node.body)
-        return _make.Allocate(buffer_var, node.dtype, extents, condition, body)
+        return _expr.Allocate(buffer_var, node.dtype, extents, condition, body)
 
     def mutate_AttrStmt(self, node):
         value = self.mutate(node.value)
         body = self.mutate(node.body)
-        return _make.AttrStmt(node.node, node.attr_key, value, body)
+        return _expr.AttrStmt(node.node, node.attr_key, value, body)
 
     def mutate_Free(self, node):
         buffer_var = self.mutate(node.buffer_var)
-        return _make.Free(buffer_var)
+        return _expr.Free(buffer_var)
 
     def mutate_Block(self, node):
         first = self.mutate(node.first)
         rest = self.mutate(node.rest)
-        return _make.Block(first, rest)
+        return _expr.Block(first, rest)
 
     def mutate_IfThenElse(self, node):
         condition = self.mutate(node.condition)
         then_case = self.mutate(node.then_case)
         else_case = self.mutate(node.else_case)
-        return _make.IfThenElse(condition, then_case, else_case)
+        return _expr.IfThenElse(condition, then_case, else_case)
 
     def mutate_Evaluate(self, node):
         value = self.mutate(node.value)
-        return _make.Evaluate(value)
+        return _expr.Evaluate(value)
 
     def mutate_KernelDef(self, node):
         args = self.mutate(node.args)
         body = self.mutate(node.body)
         ret_void = self.mutate(node.ret_void)
-        return _make.KernelDef(args, body, ret_void, node.ret_type, node.name)
+        return _expr.KernelDef(args, body, ret_void, node.ret_type, node.name)
 
     def mutate_KernelStmt(self, node):
         args = self.mutate(node.args)
-        return _make.KernelStmt(args, node.name)
+        return _expr.KernelStmt(args, node.name)
 
     def mutate_Return(self, node):
         value = self.mutate(node.value)
-        return _make.Return(value)
+        return _expr.Return(value)
 
     def mutate_Break(self, node):
-        return _make.Break()
+        return _expr.Break()
 
     def mutate_While(self, node):
         condition = self.mutate(node.condition)
         bdoy = self.mutate(node.body)
-        return _make.While(condition, body)
+        return _expr.While(condition, body)
 
     def mutate_Tuple(self, node):
         _list = list(node)

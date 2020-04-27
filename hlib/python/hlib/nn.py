@@ -2,11 +2,12 @@ from collections import OrderedDict
 import heterocl as hcl
 import tvm
 import tvm.tir as tir
+import tvm.te as te
 
 dtype = hcl.Float()
 
 sum = hcl.reducer(0, lambda x, y: x + y, dtype)
-max = hcl.reducer(-1, lambda x, y: tvm.make.Max(x, y), dtype)
+max = hcl.reducer(-1, lambda x, y: tir.expr.Max(x, y), dtype)
 
 def simplify(expr):
     return tvm.ir_pass.Simplify(expr) if isinstance(expr, tir.expr.PrimExpr) else expr
@@ -51,8 +52,6 @@ def conv2d_nchw(Input, Filter, name="conv2d", stride=[1,1], padding=[[0,0],[0,0]
     rc = hcl.reduce_axis(0, in_channel)
     ry = hcl.reduce_axis(0, kernel_h)
     rx = hcl.reduce_axis(0, kernel_w)
-    print("hlib/nn.py: test1")
-    print(batch, out_channel, out_height, out_width, stride_h, stride_w, Input, Filter)
     return hcl.compute(
         (batch, out_channel, out_height, out_width),
         lambda nn, ff, yy, xx: sum(
@@ -82,7 +81,7 @@ def dense(data, weight, bias=None, name="dense"):
         ('k', in_dim),
         ('j', out_dim),
         ('i', batch),
-        ('app_name', tvm.make.StringImm('mm'))])
+        ('app_name', tir.expr.StringImm('mm'))])
     matmul = hcl.compute((batch, out_dim), lambda i, j: sum(data[i, k] * weight[j, k], axis=k), name, attrs=attrs)
     if bias is not None:
         matmul = hcl.compute(
@@ -93,8 +92,8 @@ def dense(data, weight, bias=None, name="dense"):
     return matmul
 
 def tanh(x, name="tanh"):
-    return hcl.compute(x.shape, lambda *args: tvm.tanh(x[args]), name,
-                       attrs=OrderedDict([('app_name', tvm.make.StringImm('tanh'))]))
+    return hcl.compute(x.shape, lambda *args: te.tanh(x[args]), name,
+                       attrs=OrderedDict([('app_name', tir.expr.StringImm('tanh'))]))
 
 def max_pool(data, kernel, stride, padding=[[0,0],[0,0]], name="max_pool"):
     assert len(data.shape) == 4, "only support 4-dim pooling"
@@ -111,7 +110,6 @@ def max_pool(data, kernel, stride, padding=[[0,0],[0,0]], name="max_pool"):
     out_width = simplify((width - kernel_width + pad_left + pad_right) // stride_width + 1)
     dheight = hcl.reduce_axis(0, kernel_height)
     dwidth = hcl.reduce_axis(0, kernel_width)
-
     return hcl.compute(
         (batch, channel, out_height, out_width),
         lambda i, c, h, w: max(data[i, c, h*stride_height+dheight, w*stride_width+dwidth], axis=[dheight, dwidth]),
@@ -124,7 +122,7 @@ def max_pool(data, kernel, stride, padding=[[0,0],[0,0]], name="max_pool"):
             ('kernel_w', kernel[0]),
             ('stride_h', stride[1]),
             ('stride_w', stride[0]),
-            ('app_name', tvm.make.StringImm('max_pool'))]))
+            ('app_name', tir.expr.StringImm('max_pool'))]))
 
 def flatten(data):
     ishape = data.shape
@@ -137,11 +135,11 @@ def flatten(data):
         index = []
         for s in reversed(shape):
             index.append(idx % s)
-            idx = idx / s
+            idx = te.div(idx, s)
         return list(reversed(index))
 
     return hcl.compute(oshape, lambda i, j: data[tuple([i] + unwrap(j, ishape[1:]))],
-                       attrs=OrderedDict([('app_name', tvm.make.StringImm('flatten'))]))
+                       attrs=OrderedDict([('app_name', tir.expr.StringImm('flatten'))]))
 
 def softmax(out, x):
     assert len(x.shape) == 2, "only support 2-dim softmax"
