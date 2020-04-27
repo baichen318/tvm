@@ -131,7 +131,6 @@ class Mutator(object):
         return binop(a, b)
 
     def mutate_Add(self, node):
-        print("mutator.py: Add", node)
         return self.mutate_BinOp(_expr.Add, node)
 
     def mutate_Sub(self, node):
@@ -253,84 +252,84 @@ class Mutator(object):
         var = self.mutate(node.var)
         value = self.mutate(node.value)
         body = self.mutate(node.body)
-        return _expr.LetStmt(var, value, body)
+        return _stmt.LetStmt(var, value, body)
 
     def mutate_AssertStmt(self, node):
         condition = self.mutate(node.condition)
         message = self.mutate(node.message)
         body = self.mutate(node.body)
-        return _expr.AssertStmt(condition, message, body)
+        return _stmt.AssertStmt(condition, message, body)
 
     def mutate_ProducerConsumer(self, node):
         body = self.mutate(body)
-        return _expr.ProducerConsumer(node.func, node.is_producer, body)
+        return _stmt.ProducerConsumer(node.func, node.is_producer, body)
 
     def mutate_For(self, node):
         loop_var = self.mutate(node.loop_var)
         _min = self.mutate(node.min)
         extent = self.mutate(node.extent)
         body = self.mutate(node.body)
-        return _expr.For(loop_var, _min, extent, node.for_type, node.device_api, body)
+        return _stmt.For(loop_var, _min, extent, node.for_type, node.device_api, body)
 
     def mutate_Store(self, node):
         buffer_var = self.mutate(node.buffer_var)
         index = self.mutate(node.index)
         value = self.mutate(node.value)
         predicate = self.mutate(node.predicate)
-        return _expr.Store(buffer_var, value, index, predicate)
+        return _stmt.Store(buffer_var, value, index, predicate)
 
     def mutate_Allocate(self, node):
         buffer_var = self.mutate(node.buffer_var)
         extents = self.mutate(node.extents)
         condition = self.mutate(node.condition)
         body = self.mutate(node.body)
-        return _expr.Allocate(buffer_var, node.dtype, extents, condition, body)
+        return _stmt.Allocate(buffer_var, node.dtype, extents, condition, body)
 
     def mutate_AttrStmt(self, node):
         value = self.mutate(node.value)
         body = self.mutate(node.body)
-        return _expr.AttrStmt(node.node, node.attr_key, value, body)
+        return _stmt.AttrStmt(node.node, node.attr_key, value, body)
 
     def mutate_Free(self, node):
         buffer_var = self.mutate(node.buffer_var)
-        return _expr.Free(buffer_var)
+        return _stmt.Free(buffer_var)
 
     def mutate_Block(self, node):
         first = self.mutate(node.first)
         rest = self.mutate(node.rest)
-        return _expr.Block(first, rest)
+        return _stmt.Block(first, rest)
 
     def mutate_IfThenElse(self, node):
         condition = self.mutate(node.condition)
         then_case = self.mutate(node.then_case)
         else_case = self.mutate(node.else_case)
-        return _expr.IfThenElse(condition, then_case, else_case)
+        return _stmt.IfThenElse(condition, then_case, else_case)
 
     def mutate_Evaluate(self, node):
         value = self.mutate(node.value)
-        return _expr.Evaluate(value)
+        return _stmt.Evaluate(value)
 
     def mutate_KernelDef(self, node):
         args = self.mutate(node.args)
         body = self.mutate(node.body)
         ret_void = self.mutate(node.ret_void)
-        return _expr.KernelDef(args, body, ret_void, node.ret_type, node.name)
+        return _stmt.KernelDef(args, body, ret_void, node.ret_type, node.name)
 
     def mutate_KernelStmt(self, node):
         args = self.mutate(node.args)
-        return _expr.KernelStmt(args, node.name)
+        return _stmt.KernelStmt(args, node.name)
 
     def mutate_Return(self, node):
         value = self.mutate(node.value)
-        return _expr.Return(value)
+        return _stmt.Return(value)
 
     def mutate_Break(self, node):
-        return _expr.Break()
+        return _stmt.Break()
 
     def mutate_While(self, node):
         condition = self.mutate(node.condition)
         bdoy = self.mutate(node.body)
-        return _expr.While(condition, body)
+        return _stmt.While(condition, body)
 
     def mutate_Tuple(self, node):
         _list = list(node)
