@@ -387,6 +387,24 @@ def scalar(init=0, name=None, dtype=None):
     name = get_name("scalar", name)
     return compute((1,), lambda x: init, name, dtype)
 
+def copy(tensor, name=None):
+    """A syntactic sugar for copying an existing tensor.
+
+    Parameters
+    ----------
+    tensor : Tensor
+        The tensor to be copied from
+
+    name : str, optional
+        The name of the returned tensor
+
+    Returns
+    -------
+    Tensor
+    """
+    name = get_name("copy", name)
+    return compute(tensor.shape, lambda *args: tensor[args], name, tensor.dtype)
+
 def reduce_axis(lower, upper, name=None):
     """Create a reduction axis for reduction operations.
 
