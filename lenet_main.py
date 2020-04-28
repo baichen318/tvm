@@ -27,10 +27,10 @@ def softmax(out, x):
     assert len(x.shape) == 2, "only support 2-dim softmax"
     m, n = x.shape
     k = hcl.reduce_axis(0, n)
-    max_elem = hcl.compute((m,), lambda i: hcl.max(x[i, k], axis=k))
+    max_elem = hcl.compute((m,), lambda i: hcl.hcl_max(x[i, k], axis=k))
     k = hcl.reduce_axis(0, n)
     expsum = hcl.compute((m,),
-            lambda i: hcl.sum(hcl.exp(x[i, k] - max_elem[i]), axis=k))
+            lambda i: hcl.hcl_max(hcl.exp(x[i, k] - max_elem[i]), axis=k))
     return hcl.update(out,
             lambda i, j: hcl.exp(x[i, j] - max_elem[i]) / expsum[i])
 
@@ -96,6 +96,7 @@ def build_lenet_inf(batch_size=batch_size, target=None):
     scheme.quantize(
             [build_lenet.tanh1, build_lenet.tanh2, build_lenet.tanh3], qtype2)
     s = hcl.create_schedule_from_scheme(scheme)
+
     return hcl.build(s, target=target)
 
 f = build_lenet_inf()

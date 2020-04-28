@@ -632,3 +632,6 @@ def reducer(init, freduce, dtype="int32", name=None):
 
     make_reduce.__doc__ = doc_str.format(name)
     return make_reduce
+
+hcl_sum = reducer(0, lambda x, y: x + y, name="sum")
+hcl_max = reducer(_ffi_api.min_value("float"), _ffi_api.Max, name="max")
