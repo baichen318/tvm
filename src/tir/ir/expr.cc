@@ -773,44 +773,11 @@ TVM_REGISTER_GLOBAL("tir.Mul")
 TVM_REGISTER_GLOBAL("tir.Div")
 .set_body_typed(DivNode::make);
 
-TVM_REGISTER_GLOBAL("tir.Mod")
-.set_body_typed(ModNode::make);
-
 TVM_REGISTER_GLOBAL("tir.FloorDiv")
 .set_body_typed(FloorDivNode::make);
 
 TVM_REGISTER_GLOBAL("tir.FloorMod")
 .set_body_typed(FloorModNode::make);
-
-TVM_REGISTER_GLOBAL("tir.Min")
-.set_body_typed(MinNode::make);
-
-TVM_REGISTER_GLOBAL("tir.Max")
-.set_body_typed(MaxNode::make);
-
-TVM_REGISTER_GLOBAL("tir.EQ")
-.set_body_typed(EQNode::make);
-
-TVM_REGISTER_GLOBAL("tir.NE")
-.set_body_typed(NENode::make);
-
-TVM_REGISTER_GLOBAL("tir.LT")
-.set_body_typed(LTNode::make);
-
-TVM_REGISTER_GLOBAL("tir.LE")
-.set_body_typed(LENode::make);
-
-TVM_REGISTER_GLOBAL("tir.GT")
-.set_body_typed(GTNode::make);
-
-TVM_REGISTER_GLOBAL("tir.GE")
-.set_body_typed(GENode::make);
-
-TVM_REGISTER_GLOBAL("tir.And")
-.set_body_typed(AndNode::make);
-
-TVM_REGISTER_GLOBAL("tir.Or")
-.set_body_typed(OrNode::make);
 
 TVM_REGISTER_GLOBAL("tir.Not")
 .set_body_typed(NotNode::make);

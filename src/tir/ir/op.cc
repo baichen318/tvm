@@ -715,6 +715,13 @@ TVM_REGISTER_GLOBAL("tir._cast")
     }                                                                   \
   })
 
+#define REGISTER_MAKE_BINARY_OP_SET_BODY(OP)                            \
+  TVM_REGISTER_GLOBAL("tir."#OP)                                        \
+  .set_body([](TVMArgs args,  TVMRetValue *ret) {                       \
+      PrimExpr a = args[0], b = args[1];                                \
+      BinaryOpMatchTypes(a, b);                                         \
+      *ret = TVM_STR_CONCAT(OP, Node)::make(a, b);                      \
+  })
 
 REGISTER_MAKE_BINARY_OP(_OpAdd, operator+);
 REGISTER_MAKE_BINARY_OP(_OpSub, operator-);
@@ -744,6 +751,17 @@ REGISTER_MAKE_BIT_OP(bitwise_xor, operator^);
 REGISTER_MAKE_BIT_OP(left_shift, operator<<); // NOLINT(*)
 REGISTER_MAKE_BIT_OP(right_shift, operator>>);
 
+REGISTER_MAKE_BINARY_OP_SET_BODY(Mod);
+REGISTER_MAKE_BINARY_OP_SET_BODY(Min);
+REGISTER_MAKE_BINARY_OP_SET_BODY(Max);
+REGISTER_MAKE_BINARY_OP_SET_BODY(EQ);
+REGISTER_MAKE_BINARY_OP_SET_BODY(NE);
+REGISTER_MAKE_BINARY_OP_SET_BODY(LT);
+REGISTER_MAKE_BINARY_OP_SET_BODY(LE);
+REGISTER_MAKE_BINARY_OP_SET_BODY(GT);
+REGISTER_MAKE_BINARY_OP_SET_BODY(GE);
+REGISTER_MAKE_BINARY_OP_SET_BODY(And);
+REGISTER_MAKE_BINARY_OP_SET_BODY(Or);
 TVM_REGISTER_GLOBAL("tir._OpIfThenElse")
 .set_body_typed([] (PrimExpr cond, PrimExpr true_value, PrimExpr false_value) {
   return if_then_else(cond, true_value, false_value);
