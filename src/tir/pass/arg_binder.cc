@@ -184,6 +184,8 @@ void ArgBinder::BindDLTensor(const Buffer& buffer,
                IntImm(DataType::UInt(8), dtype.code()) &&
                TVMArrayGet(DataType::UInt(8), handle, intrinsic::kArrTypeBits) ==
                IntImm(DataType::UInt(8), dtype.bits()) &&
+               TVMArrayGet(DataType::UInt(8), handle, intrinsic::kArrTypeFracs) ==
+               IntImm(DataType::UInt(8), dtype.fracs()) &&
                TVMArrayGet(DataType::UInt(16), handle, intrinsic::kArrTypeLanes) ==
                IntImm(DataType::UInt(16), dtype.lanes()));
   if (!(dtype == DataType::Int(4) ||
