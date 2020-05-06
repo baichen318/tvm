@@ -43,6 +43,7 @@ Stmt MakePipeline(const Stage& s,
                   Stmt consumer,
                   bool debug_keep_trivial_loop) {
   Stmt producer = s->op->BuildProvide(s, dom_map, debug_keep_trivial_loop);
+
   if (producer.defined()) {
     producer = ProducerConsumerNode::make(s->op, true, producer);
   }
@@ -88,9 +89,7 @@ class InjectStmt : public StmtMutator {
       CHECK(input_stmt.defined());
       auto stmt = StmtMutator::VisitStmt(input_stmt);
       const AttrStmtNode* op = stmt.as<AttrStmtNode>();
-      #include <iostream>
       if (op != nullptr) {
-        std::cout << "schedule_ops.cc: " << op->attr_key << std::endl;
         if (op->attr_key == attr::attach_scope) {
           const ExternOpNode* node = stage_->op.as<ExternOpNode>();
           if (op->node == node->output_placeholders[0]) {
@@ -102,8 +101,6 @@ class InjectStmt : public StmtMutator {
           CHECK_EQ(arr.size(), 2U);
           const BufferNode* buffer = arr[0].as<BufferNode>();
           const ExternOpNode* ext_op = stage_->op.as<ExternOpNode>();
-          std::cout << "schedule_ops.cc: name: " << buffer->name << "\tscope: " << buffer->scope << std::endl;
-          std::cout << "schedule_ops.cc: ext_op: " << ext_op->body << std::endl;
           if (ext_op != nullptr) {
             bool remove = false;
             for (auto b : ext_op->output_placeholders) {
@@ -115,7 +112,6 @@ class InjectStmt : public StmtMutator {
           }
         }
       }
-      std::cout << "schedule_ops.cc: nullptr" << std::endl;
       return stmt;
     }
   private:
@@ -138,17 +134,31 @@ class InjectAttach : public StmtMutator {
     CHECK(input_stmt.defined());
     auto stmt = StmtMutator::VisitStmt(input_stmt);
     const AttrStmtNode* op = stmt.as<AttrStmtNode>();
-    if (op != nullptr &&
-        op->attr_key == attr::loop_scope) {
-      if (attach_spec_->attach_type == kScope &&
-          op->node == attach_spec_->attach_ivar) {
-        CHECK(!found_attach)
+    if (op != nullptr) {
+      if (op->attr_key == attr::attach_scope) {
+        if (stage_->attach_ivar == op->node) {
+          CHECK(!found_attach)
             << "Find IterVar" << attach_spec_->attach_ivar
             << " in multiple places in the IR";
-        found_attach = true;
-        stmt = AttrStmtNode::make(
-            op->node, op->attr_key, op->value,
-            MakePipeline(stage_, dom_map_, op->body, debug_keep_trivial_loop_));
+          found_attach = true;
+          stmt = MakePipeline(stage_, dom_map_, op->body, true);
+        }
+      }
+      else if(op->attr_key == attr::buffer_bind_scope) {
+        Array<ObjectRef> arr = Downcast<Array<ObjectRef> >(op->node);
+        CHECK_EQ(arr.size(), 2U);
+        const BufferNode* buffer = arr[0].as<BufferNode>();
+        const ExternOpNode* ext_op = stage_->op.as<ExternOpNode>();
+        if (ext_op != nullptr) {
+          bool remove = false;
+          for (auto b : ext_op -> output_placeholders) {
+            const BufferNode* buf = b.as<BufferNode>();
+            if (buf == buffer)
+                remove = true;
+          }
+          if (remove)
+              stmt = op->body;
+        }
       }
     }
     return stmt;

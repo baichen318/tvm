@@ -234,3 +234,5 @@ conda/pkg
 *.interp
 
 workstation/
+.tags
+.tags_sorted_by_file

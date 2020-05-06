@@ -433,6 +433,8 @@ class ExternOpNode : public OperationNode {
   Array<Buffer> output_placeholders;
   /*! \brief the statement that generates the computation. */
   Stmt body;
+  /*! \brief borrowed from HeteroCL */
+  Array<IterVar> axis;
 
   /*! \brief constructor */
   ExternOpNode() {}
@@ -466,6 +468,7 @@ class ExternOpNode : public OperationNode {
   void VisitAttrs(AttrVisitor* v) {
     v->Visit("name", &name);
     v->Visit("tag", &tag);
+    v->Visit("axis", &axis);
     v->Visit("attrs", &attrs);
     v->Visit("inputs", &inputs);
     v->Visit("input_placeholders", &input_placeholders);
@@ -474,6 +477,7 @@ class ExternOpNode : public OperationNode {
   }
   TVM_DLL static Operation make(std::string name,
                                std::string tag,
+                               Array<IterVar> axis,
                                Map<std::string, ObjectRef> attrs,
                                Array<Tensor> inputs,
                                Array<Buffer> input_placeholders,

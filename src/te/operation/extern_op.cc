@@ -45,7 +45,7 @@ int ExternOpNode::num_outputs() const {
 }
 
 Array<IterVar> ExternOpNode::root_iter_vars() const {
-  return {};
+  return axis;
 }
 
 DataType ExternOpNode::output_dtype(size_t i) const {
@@ -59,6 +59,7 @@ Array<PrimExpr> ExternOpNode::output_shape(size_t i) const {
 
 Operation ExternOpNode::make(std::string name,
                              std::string tag,
+                             Array<IterVar> axis,
                              Map<std::string, ObjectRef> attrs,
                              Array<Tensor> inputs,
                              Array<Buffer> input_placeholders,
@@ -70,6 +71,7 @@ Operation ExternOpNode::make(std::string name,
   auto n = make_object<ExternOpNode>();
   n->name = std::move(name);
   n->tag = std::move(tag);
+  n->axis = std::move(axis);
   n->attrs = std::move(attrs);
   CHECK_EQ(inputs.size(), input_placeholders.size());
   for (size_t i = 0; i < inputs.size(); ++i) {
@@ -137,6 +139,16 @@ void ExternOpNode::GatherBound(
     const Operation& self,
     const std::unordered_map<Tensor, TensorDom>& tensor_dom,
     std::unordered_map<IterVar, Range>* out_dom_map) const {
+  const TensorDom& tdom = tensor_dom.at(self.output(0));
+  for (size_t i = 0; i < this->axis.size(); i++) {
+      Range r;
+      if (i < tdom.data.size())
+          r = arith::Union(tdom.data.at(i)).cover_range(this->axis[i]->dom);
+      else
+          r = this->axis[i]->dom;
+      CHECK(!out_dom_map->count(this->axis[i]));
+      (*out_dom_map)[this->axis[i]] = r;
+  }
 }
 
 Stmt ExternOpNode::BuildRealize(
@@ -145,6 +157,25 @@ Stmt ExternOpNode::BuildRealize(
     const Stmt& body) const {
   CHECK_EQ(stage->op.get(), this);
   Stmt realize_body = body;
+  auto f_push_bind = [&](Buffer buffer, Tensor tensor) {
+    Array<ObjectRef> bind_spec;
+    Array<PrimExpr> tuple;
+    bind_spec.push_back(buffer);
+    bind_spec.push_back(tensor);
+    for (size_t k = 0; k < buffer->shape.size(); ++k) {
+      tuple.push_back(make_const(buffer->shape[k].dtype(), 0));
+      tuple.push_back(buffer->shape[k]);
+    }
+    realize_body = AttrStmtNode::make(
+        bind_spec, attr::buffer_bind_scope,
+        CallNode::make(DataType::Handle(), intrinsic::tvm_tuple, tuple, CallNode::Intrinsic), realize_body);
+  };
+  for (size_t i = output_placeholders.size(); i != 0; --i) {
+    f_push_bind(output_placeholders[i - 1], stage->op.output(i - 1));
+  }
+  for (size_t i = inputs.size(); i != 0; --i) {
+    f_push_bind(input_placeholders[i - 1], inputs[i - 1]);
+  }
   for (int k = 0; k < num_outputs(); ++k) {
     Tensor t = stage->op.output(k);
     Region bounds;
@@ -165,26 +196,8 @@ Stmt ExternOpNode::BuildProvide(
     const std::unordered_map<IterVar, Range>& dom_map,
     bool debug_keep_trivial_loop) const {
   CHECK_EQ(stage->op.operator->(), this);
+  Stmt stmt = this->body;
   Stmt ret = AttrStmtNode::make(make_zero(DataType::Int(32)), attr::extern_scope, 0, this->body);
-  auto f_push_bind = [&ret](Buffer buffer, Tensor tensor) {
-    Array<ObjectRef> bind_spec;
-    Array<PrimExpr> tuple;
-    bind_spec.push_back(buffer);
-    bind_spec.push_back(tensor);
-    for (size_t k = 0; k < buffer->shape.size(); ++k) {
-      tuple.push_back(make_const(buffer->shape[k].dtype(), 0));
-      tuple.push_back(buffer->shape[k]);
-    }
-    ret = AttrStmtNode::make(
-        bind_spec, attr::buffer_bind_scope,
-        CallNode::make(DataType::Handle(), intrinsic::tvm_tuple, tuple, CallNode::Intrinsic), ret);
-  };
-  for (size_t i = output_placeholders.size(); i != 0; --i) {
-    f_push_bind(output_placeholders[i - 1], stage->op.output(i - 1));
-  }
-  for (size_t i = inputs.size(); i != 0; --i) {
-    f_push_bind(input_placeholders[i - 1], inputs[i - 1]);
-  }
   return ret;
 }
 }  // namespace te

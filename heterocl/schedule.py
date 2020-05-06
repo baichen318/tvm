@@ -92,6 +92,7 @@ class Schedule(object):
         if plot:
             nx.draw(graph, pos, with_labels=True, node_color="w", edge_color="black")
             plt.plot()
+            plt.show()
 
         return graph
 
@@ -309,7 +310,7 @@ class Stage(object):
         output_bufs = [self._buf]
         body = self.pop_stmt()
         Stage._current.pop()
-        op = _ExternOp(self.name, "", self.attrs, input_ops,
+        op = _ExternOp(self.name, "", self.axis_list, self.attrs, input_ops,
                        input_bufs, output_bufs, body)
         self._op = op.output(0)
         # update last_update stages
