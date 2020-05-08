@@ -94,7 +94,7 @@ def build_lenet_inf(batch_size=batch_size, target=None):
              weight_fc1, weight_fc2, lenet], build_lenet)
     # quantize the three activation layers
     scheme.quantize(
-            [build_lenet.tanh1, build_lenet.tanh2, build_lenet.tanh3], qtype2)
+            [build_lenet.tanh1, build_lenet.tanh2], qtype2)
     s = hcl.create_schedule_from_scheme(scheme)
 
     return hcl.build(s, target=target)
