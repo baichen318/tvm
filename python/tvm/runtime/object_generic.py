@@ -137,5 +137,4 @@ def const(value, dtype=None):
             dtype, value & ((1 << 32) - 1), value >> 32)
     return _ffi_node_api._const(value, dtype)
 
-
 _set_class_object_generic(ObjectGeneric, convert_to_object)

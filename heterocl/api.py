@@ -6,12 +6,16 @@ from tvm.driver.build_module import build as _build, lower as _lower
 import tvm
 from tvm.te import _ffi_api as tvm_api
 from tvm.te import schedule as _schedule
+from tvm.runtime import convert
+from tvm.tir import expr as _expr
 from tvm.tir.op import call_intrin
 from .tensor import Scalar, Tensor
 from .schedule import Schedule, Stage
 from .scheme import Scheme
 #from ndarray import  asarray
 from . import util, config
+from . import type
+
 
 def init(init_dtype="int32"):
     """Initialize a HeteroCL environment with configurations.
@@ -58,6 +62,7 @@ def init(init_dtype="int32"):
     Schedule.last_stages = OrderedSet([])
     Scheme.current = None
 
+
 def placeholder(shape, name=None, dtype=None):
     """Construct a HeteroCL placeholder for inputs/outputs.
 
@@ -103,6 +108,7 @@ def placeholder(shape, name=None, dtype=None):
     tensor.last_update = stage
     return tensor
 
+
 def create_scheme(inputs, func):
     """Create a quantization scheme.
 
@@ -144,6 +150,7 @@ def create_scheme(inputs, func):
     for op in Schedule.stage_ops:
         func.__setattr__(op.name, op)
     return Scheme(inputs, func)
+
 
 def create_schedule(inputs, func=None):
     """Create a schedule for compute optimizations.
@@ -213,6 +220,7 @@ def create_schedule(inputs, func=None):
     ops = [t_._op.op for t_ in t]
     return Schedule(_schedule.create_schedule(ops), inputs)
 
+
 def create_schedule_from_scheme(scheme):
     """Create a schedule from a scheme.
 
@@ -247,6 +255,7 @@ def create_schedule_from_scheme(scheme):
             i.last_update = i.first_update
     return create_schedule(scheme.inputs, scheme.func)
 
+
 def lower(schedule):
     """Get the generated IR of a given schedule.
 
@@ -268,6 +277,7 @@ def lower(schedule):
         else:
             new_inputs.append(i.var)
     return _lower(schedule.sch, new_inputs, simple_mode=True)
+
 
 def build(schedule, target=None, name="default_function"):
     """Build the executable according to the schedule and target.
@@ -300,3 +310,47 @@ def build(schedule, target=None, name="default_function"):
         else:
             new_inputs.append(i.var)
     return _build(schedule.sch, new_inputs, target=target, name=name)
+
+def cast(dtype, expr):
+    """Cast an expression to specified data type.
+
+    Parameters
+    ----------
+    dtype : Type
+        The target data type
+
+    expr : Expr
+        The expression to be cast
+
+    Returns
+    -------
+    Expr
+    """
+    dtype = type.dtype_to_str(dtype)
+    return _expr.Cast(dtype, expr)
+
+def select(cond, true, false):
+    """Construct a select branch with the given condition.
+
+    It is similar to the following Python expression.
+
+    .. code-block:: python
+
+        ret = true if cond else false
+
+    Parameters
+    ----------
+    cond : Expr
+        The condition
+
+    true : Expr
+        The true branch
+
+    false : Expr
+        The false branch
+
+    Returns
+    -------
+    Expr
+    """
+    return _expr.Select(convert(cond), convert(true), convert(false))
