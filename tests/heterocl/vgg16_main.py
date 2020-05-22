@@ -62,7 +62,7 @@ def build_model(input_image, weight_conv1, weight_conv2, weight_conv3, weight_co
 qtype1 = hcl.Fixed(16, 14)
 qtype2 = hcl.Fixed(16, 14)
 correct_sum = 0
-batch_size = 1000
+batch_size = 1 
 
 
 def build_model_inf(batch_size=batch_size, target=None):
@@ -172,10 +172,11 @@ weight_fc3_hcl = hcl.asarray(weight_fc3_np)
 
 f = build_model_inf()
 
-# im1 = Image.open("0.jpeg")
-# im2 = im1.resize((224, 224))
-# input_image_np = np.array(im2)
-input_image_np = np.random.randn(batch_size, 3, 224, 224)
+im1 = Image.open("0.jpeg")
+im2 = im1.resize((224, 224))
+input_image_np = np.array(im2)
+input_image_np = np.transpose(input_image_np)
+input_image_np = np.expand_dims(input_image_np, axis=0)
 
 input_image_hcl = hcl.asarray(input_image_np)
 output_hcl = hcl.asarray(np.zeros((batch_size, 1000)))
