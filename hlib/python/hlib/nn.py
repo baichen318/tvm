@@ -11,11 +11,22 @@ sum = hcl.reducer(0, lambda x, y: x + y, dtype)
 max = hcl.reducer(-1, lambda x, y: tir.expr.Max(x, y), dtype)
 
 def simplify(expr):
-    return tvm.ir_pass.Simplify(expr) if isinstance(expr, tir.expr.PrimExpr) else expr
+    return tvm.tir.ir_pass.Simplify(expr) if isinstance(expr, tir.expr.PrimExpr) else expr
 
-def pad(data, pad_before, pad_after=None, pad_value=0.0):
+def relu(x):
+    return max(0, x)
+
+def pad(data, pad_before, pad_after=None, pad_value=0.0, name="pad"):
     n = len(data.shape)
     pad_after = pad_after if pad_after else pad_before
+    if len(pad_before) != n:
+        raise ValueError(
+            "Input dimension and pad_before dismatch : %d vs %d" %
+            (n, len(pad_before)))
+    if len(pad_after) != n:
+        raise ValueError(
+            "Input dimension and pad_after dismatch : %d vs %d" %
+            (n, len(pad_after)))
     out_shape = tuple(
         tvm.tir.ir_pass.Simplify(
             (data.shape[i] + tir.const(pad_before[i]) + tir.const(pad_after[i]))) for i in range(n))
@@ -33,9 +44,15 @@ def pad(data, pad_before, pad_after=None, pad_value=0.0):
             not_zero = tir.all(*not_zero)
             return tir.Select(not_zero, data[tuple(index_tuple)], pad_value)
         return data[tuple(index_tuple)]
-    return hcl.compute(out_shape, _pad, name='pad')
 
-def conv2d_nchw(Input, Filter, name="conv2d", stride=[1,1], padding=[[0,0],[0,0]]):
+    return hcl.compute(out_shape, _pad, name=name)
+
+def conv2d_nchw(
+        Input,
+        Filter,
+        name="conv2d",
+        stride=[1, 1],
+        padding=[[0, 0], [0, 0]]):
     out_dtype = Input.dtype
     batch, in_channel, in_height, in_width = Input.shape
     num_filter, channel, kernel_h, kernel_w = Filter.shape
@@ -48,7 +65,7 @@ def conv2d_nchw(Input, Filter, name="conv2d", stride=[1,1], padding=[[0,0],[0,0]
     # compute graph
     pad_before = [0, 0, pad_top, pad_left]
     pad_after = [0, 0, pad_down, pad_right]
-    if padding != [[0,0],[0,0]]:
+    if padding != [[0, 0], [0, 0]]:
         Input = pad(Input, pad_before, pad_after)
     rc = hcl.reduce_axis(0, in_channel)
     ry = hcl.reduce_axis(0, kernel_h)
@@ -70,6 +87,27 @@ def conv2d_nchw(Input, Filter, name="conv2d", stride=[1,1], padding=[[0,0],[0,0]
             ('cin_dtype', tir.expr.StringImm(Input.dtype)),
             ('filter_dtype', tir.expr.StringImm(Filter.dtype)),
             ('app_name', tir.expr.StringImm('cnn'))]))
+
+
+def bias_add(data, bias, axis=-1, name='bias_add'):
+    def _broadcast(shape, *indices):
+        axes = []
+        indices = indices[0]
+        for i in range(len(shape)):
+            if shape[i] == 1:
+                axes.append(0)
+            else:
+                axes.append(indices[i])
+        return tuple(axes)
+    data_len = len(data.shape)
+    if axis < 0:
+        axis += data_len
+    num_newaxis = data_len - axis - 1
+    bias = expand_dims(bias, len(bias.shape), num_newaxis)
+    bias = expand_dims(bias, 0, axis)
+    return hcl.compute(
+        data.shape, lambda *x: data[x] + bias[_broadcast(bias.shape, x)], name=name)
+
 
 def dense(data, weight, bias=None, name="dense"):
     assert len(data.shape) == 2 and len(weight.shape) == 2, "only support 2-dim dense"
