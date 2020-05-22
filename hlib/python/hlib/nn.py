@@ -3,6 +3,7 @@ import heterocl as hcl
 import tvm
 import tvm.tir as tir
 import tvm.te as te
+from topi.util import equal_const_int
 
 dtype = hcl.Float()
 
@@ -16,8 +17,8 @@ def pad(data, pad_before, pad_after=None, pad_value=0.0):
     n = len(data.shape)
     pad_after = pad_after if pad_after else pad_before
     out_shape = tuple(
-        tvm.ir_pass.Simplify(
-            (data.shape[i] + tvm.const(pad_before[i]) + tvm.const(pad_after[i]))) for i in range(n))
+        tvm.tir.ir_pass.Simplify(
+            (data.shape[i] + tir.const(pad_before[i]) + tir.const(pad_after[i]))) for i in range(n))
     def _pad(*indices):
         not_zero = []
         index_tuple = []
@@ -29,8 +30,8 @@ def pad(data, pad_before, pad_after=None, pad_value=0.0):
                 not_zero.append(indices[i] >= pad_before[i])
                 not_zero.append(indices[i] < data.shape[i] + pad_before[i])
         if not_zero:
-            not_zero = tvm.all(*not_zero)
-            return tvm.select(not_zero, data[tuple(index_tuple)], pad_value)
+            not_zero = tir.all(*not_zero)
+            return tir.Select(not_zero, data[tuple(index_tuple)], pad_value)
         return data[tuple(index_tuple)]
     return hcl.compute(out_shape, _pad, name='pad')
 
@@ -105,7 +106,7 @@ def max_pool(data, kernel, stride, padding=[[0,0],[0,0]], name="max_pool"):
     pad_before = [0, 0, pad_top, pad_left]
     pad_after = [0, 0, pad_down, pad_right]
     if padding != [[0,0],[0,0]]:
-        data = pad(data, pad_before, pad_after, pad_value=tvm.min_value("float32"))
+        data = pad(data, pad_before, pad_after, pad_value=tir.min_value("float32"))
     out_height = simplify((height - kernel_height + pad_top + pad_down) // stride_height + 1)
     out_width = simplify((width - kernel_width + pad_left + pad_right) // stride_width + 1)
     dheight = hcl.reduce_axis(0, kernel_height)
@@ -145,10 +146,10 @@ def softmax(out, x):
     assert len(x.shape) == 2, "only support 2-dim softmax"
     m, n = x.shape
     k = hcl.reduce_axis(0, n)
-    max_elem = hcl.compute((m, ), lambda i: max(x[i, k], axis=k))
+    max_elem = hcl.compute((m, ), lambda i: hcl.hcl_max(x[i, k], axis=k))
     k = hcl.reduce_axis(0, n)
     expsum = hcl.compute(
-        (m, ), lambda i: sum(tvm.exp(x[i, k] - max_elem[i]), axis=k))
+        (m, ), lambda i: sum(hcl.exp(x[i, k] - max_elem[i]), axis=k))
     return hcl.update(
-        out, lambda i, j: tvm.exp(x[i, j] - max_elem[i]) / expsum[i])
+        out, lambda i, j: hcl.exp(x[i, j] - max_elem[i]) / expsum[i])
 
