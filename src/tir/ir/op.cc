@@ -21,6 +21,9 @@
  * \file expr_operator.cc
  */
 
+// from HeteroCL, use std::max etc.
+#include <iostream>
+
 #include <tvm/runtime/registry.h>
 #include <tvm/tir/expr.h>
 #include <tvm/tir/op.h>
@@ -71,6 +74,29 @@ void BinaryOpMatchTypes(PrimExpr& lhs, PrimExpr& rhs) {  // NOLINT(*)
   } else if (lhs.dtype().is_float() && !rhs.dtype().is_float()) {
     // int->float
     rhs = cast(lhs.dtype(), rhs);
+  } else if (lhs.dtype().is_float() && rhs.dtype().is_float()) {
+    // from HeteroCL: float(a) * float(b) -> float(max(a, b))
+	if (lhs.dtype().bits() > rhs.dtype().bits())
+	  rhs = cast(lhs.dtype(), rhs);
+	else
+	  lhs = cast(rhs.dtype(), lhs);
+  } else if (lhs.dtype().is_ufixed() || rhs.dtype().is_ufixed()) {
+    // from HeteroCL: uint(a) * uint(b) -> uint(max(a, b))
+	// uint(a) * int(b) -> uint(max(a, b))
+	int integers = std::max(lhs.dtype().bits() - lhs.dtype().fracs(),
+	  rhs.dtype().bits() - rhs.dtype().fracs());
+	int fracs = std::max(lhs.dtype().fracs(), rhs.dtype().fracs());
+	int lanes = lhs.dtype().lanes();
+	lhs = cast(DataType::UInt(integers + fracs, lanes, fracs), lhs);
+	rhs = cast(DataType::UInt(integers + fracs, lanes, fracs), rhs);
+  } else if (!lhs.dtype().is_float() && !rhs.dtype().is_float()) {
+    // from HeteroCl: int(a) * (u)int(b) -> int(max(a, b))
+	int integers = std::max(lhs.dtype().bits() - lhs.dtype().fracs(),
+	  rhs.dtype().bits() - rhs.dtype().fracs());
+	int fracs = std::max(lhs.dtype().fracs(), rhs.dtype().fracs());
+	int lanes = rhs.dtype().lanes();
+	lhs = cast(DataType::Int(integers + fracs, lanes, fracs), lhs);
+	rhs = cast(DataType::Int(integers + fracs, lanes, fracs), rhs);
   } else if ((lhs.dtype().is_int() && rhs.dtype().is_int()) ||
              (lhs.dtype().is_uint() && rhs.dtype().is_uint())) {
     // promote int to higher bits

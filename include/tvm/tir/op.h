@@ -824,5 +824,8 @@ inline PrimExpr operator%(const PrimExpr& a, const TB& b) {
   DivAmbiguityError(a);
   return a;
 }
+
+void BinaryOpMatchTypes(PrimExpr&, PrimExpr&);
+
 }  // namespace tvm
 #endif  // TVM_TIR_OP_H_
